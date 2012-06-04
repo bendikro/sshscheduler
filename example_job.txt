@@ -1,0 +1,10 @@
+# Define jobs where first line is host, and consecutive 
+# lines defining commands to run on that host
+# Separate jobs with empty line
+
+{"host" : "root@192.168.100.174", "timeout" : 20, "logfile" : "manager.log" }
+{"command" : "/root/streamzero_srv -p 5000", "expect" : "Closing conn", "kill" : True}
+
+{"host" : "root@localhost", "timeout": 20, "logfile" : "localhost.log"}
+{"command" : "/home/bendiko/master/streamzero/build/streamzero_client -s 192.168.100.174 -p 5000 -zx -d 12 -I d:2,b:5,S:40:10"}
+
