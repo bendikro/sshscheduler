@@ -1,10 +1,39 @@
-# Define jobs where first line is host, and consecutive 
+# Define jobs where first line defines the host, and consecutive 
 # lines defining commands to run on that host
-# Separate jobs with empty line
 
-{"host" : "root@192.168.100.174", "timeout" : 20, "logfile" : "manager.log" }
-{"command" : "/root/streamzero_srv -p 5000", "expect" : "Closing conn", "kill" : True}
+# default_timeout set to expected number of seconds, or None for no timeout
+# test_name - The name of the test. Results will be saved to a directory with this name
 
-{"host" : "root@localhost", "timeout": 20, "logfile" : "localhost.log"}
-{"command" : "/home/bendiko/master/streamzero/build/streamzero_client -s 192.168.100.174 -p 5000 -zx -d 12 -I d:2,b:5,S:40:10"}
+# Set to expected number of seconds, or None for no timeout
+{"settings": "", "default_timeout" : None, "pcap_dir" : "pcap", "test_name": "simple_job"}
+
+# When kill is set to True, the connection to this host will be closed when other jobs are finished 
+# 'expect' is a string the command prints to terminal when it's finished. When this string is found, the job is done
+
+# manager tcpdump
+{"type" : "ssh", "host" : "root@manager", "logfile" : "manager_pcap.log", "kill" : True}
+{"command" : "tcpdump -i eth0 -nn -w manager.pcap"}
+
+# polk tcpdump 
+{"type" : "ssh", "host" : "root@polk", "logfile" : "polk_pcap.log", "kill" : True}
+{"command" : "tcpdump -i eth0 -nn -w pcap.pcap"}
+
+# Wait 1 second for tcpdump to setup
+{"sleep" : "1" }
+
+{"type" : "ssh", "host" : "root@manager", "logfile" : "manager.log", "kill" : True }
+{"command" : "/root/streamzero_srv -p 5000"}
+
+# Wait 1 second for servers
+{"sleep" : "1" }
+
+{"type" : "ssh", "host" : "root@polk", "timeout": 20, "logfile" : "polk.log"}
+{"command" : "/root/streamzero_client -s 192.168.100.174 -p 5000 -zx -d 10 -I d:2,b:5,S:40:10", "expect" : "Finished..."}
+
+{"wait" : ""}
+
+# Copy pcap files. The files will be deleted on the remote host
+
+{"type" : "scp", "host" : "root@polk", "filename": "pcap.pcap", "target_filename": "sender.pcap", "logfile" : "polk_scp.log"}
+{"type" : "scp", "host" : "root@manager", "filename": "manager.pcap", "target_filename": "receiver.pcap", "logfile" : "manager_scp.log"}
 

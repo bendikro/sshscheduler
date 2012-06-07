@@ -96,7 +96,7 @@ class Job(Thread):
                 #    timeout = c["timeout"]
 
                 if c.has_key("expect"):
-                    print_t("Expecting:", c["expect"])
+                    print_t("Expecting string '%s' on host %s" % (c["expect"], self.host))
                     child.expect(c["expect"])                    
                 else:
                     return
@@ -108,7 +108,7 @@ class Job(Thread):
                 #print_t("Exception==========\n%s\n===========" % str(e))
                 pass
             # Print terminal prints
-            print_t("\nJob output:\n%s\n" % child.after)
+            print_t("\nJob output on '%s' :\n%s\n" % (self.host, child.after))
 
         print_t("Jobs on host %s has finished. Exiting host" % self.host)
 
@@ -244,7 +244,7 @@ def abort_job():
 def kill_threads(threads_list):
     for t in threads_list:
         try:
-            #print_t("read_nonblocking: %s : %s", (t.host, str(t.commands)))
+            print_t("read_nonblocking: %s : %s", (t.host, str(t.commands)))
             t.child.read_nonblocking(size=1000, timeout=0)
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
             #print_t("Exception: %s : %s" % (type(e), e))
@@ -298,7 +298,7 @@ if __name__ == "__main__":
             if not job[0].has_key("timeout"):
                 job[0]["timeout"] = settings["default_timeout"]
             t = Job(job[0], job[1])
-            if job[0].has_key("kill"):
+            if job[0].has_key("kill") and job[0]["kill"] is True:
                 threads_to_kill.append(t)
             else:
                 threads.append(t)
@@ -306,16 +306,19 @@ if __name__ == "__main__":
         elif job[0].has_key("sleep"):
             sleep(float(job[0]["sleep"]))
         elif job[0].has_key("wait"):
-                # Wait for all previous jobs before continuing
-            if not join_current_threads():
-                print("Test interrupted. Killing jobs...")
-                abort_job()
-                break
-            else:
+            print_t("WAIT - waiting for threads")
+            # Wait for all previous jobs before continuing
+            if join_current_threads():
                 # Job was not aborted by SIGTERM. Kill the jobs denoted with kill
+                print_t("Jobs completed uninterupted. Killing threads:", len(threads_to_kill))
                 kill_threads(threads_to_kill)
                 break
-
+            else:
+                print()
+                print_t("Test interrupted by CTRL-c!\n")
+                abort_job()
+                break
+               
     end_time = datetime.now()
 
     # Gather results
