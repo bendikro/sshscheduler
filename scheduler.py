@@ -281,7 +281,7 @@ if __name__ == "__main__":
     jobs = parse_jobs(sys.argv[1])
 
     # Setup directories for storing pcap and log files
-    job_date = datetime.now().strftime("%Y%m%d-%H%M-%S")
+    job_date = datetime.now().strftime("%Y-%m-%d-%H%M-%S")
     pcap_dir = "%s/%s/%s" % (settings["pcap_dir"], settings["test_name"], job_date)
     log_dir = "%s/logs" % pcap_dir
     os.makedirs(log_dir)
