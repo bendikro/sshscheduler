@@ -57,6 +57,7 @@ class Job(Thread):
         self.host = host_conf["host"]
         self.commands = commands
         self.timeout = 30 # Default timeout of 30 seconds
+        self.login_timeout = 10
 
         self.logfile = None
         if host_conf.has_key("logfile"):
@@ -79,11 +80,12 @@ class Job(Thread):
         elif self.conf["type"] == "scp":
             scp_cmd = "scp %s:%s %s/%s" % (self.host, self.conf["filename"], self.conf["target_dir"], self.conf["target_filename"])
             print_t("Executing scp command: %s" % scp_cmd)
-            pexpect.run(scp_cmd)
+            result = pexpect.run(scp_cmd, withexitstatus=True)
+            print_t("Result:", result)
             # Delete file
-            del_cmd = "ssh %s \"rm %s\"" % (self.host, self.conf["filename"])
-            print_t("Deleting pcap file:", del_cmd)
-            pexpect.run(del_cmd)
+            #del_cmd = "ssh %s \"rm %s\"" % (self.host, self.conf["filename"])
+            #print_t("Deleting pcap file:", del_cmd)
+            #pexpect.run(del_cmd)
         
     def execute_commands(self, child, commands):
         for c in commands:
@@ -107,7 +109,7 @@ class Job(Thread):
                 #    child.expect(PEXPECT_COMMAND_PROMPT)
                 # Makes the call return
             except Exception, e:
-                #print_t("Exception==========\n%s\n===========" % str(e))
+                print_t("Exception==========\n%s\n===========" % str(e))
                 pass
             # Print terminal prints
             print_t("\nJob output on '%s' :\n%s\n" % (self.host, child.after))
@@ -135,6 +137,7 @@ class Job(Thread):
         print_t("Connecting to host '%s' with timeout '%s'" % (host, str(self.timeout)))
         
         ssh = "ssh %s" % (host)
+        print_t("cmd:" + ssh)
         child = pexpect.spawn(ssh, timeout=self.timeout, maxread=100, searchwindowsize=100)
         
         if self.logfile:
@@ -247,7 +250,8 @@ def kill_threads(threads_list):
     for t in threads_list:
         try:
             print_t("read_nonblocking: %s : %s", (t.host, str(t.commands)))
-            t.child.read_nonblocking(size=1000, timeout=0)
+            if t.conf["type"] == "ssh":
+                t.child.read_nonblocking(size=1000, timeout=0)
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
             #print_t("Exception: %s : %s" % (type(e), e))
             # pexpect.TIMEOUT raised if no new data in buffer
