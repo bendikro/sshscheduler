@@ -40,6 +40,8 @@ TERMINAL_TYPE = 'vt100'
 # This is the prompt we get if SSH does not have the remote host's public key stored in the cache.
 SSH_NEWKEY = '(?i)are you sure you want to continue connecting'
 
+lock_file = "%s/sshscheduler.lock" % os.getenv("HOME")
+
 from threading import Thread
 
 def print_t(*arg):
@@ -272,12 +274,24 @@ def join_current_threads():
     threads = []
     return True
 
+def handle_only_one_job_in_execution():
+    print("lock_file:", lock_file)
+    if os.path.isfile(lock_file):
+        return False
+    f = open(lock_file, 'w+')
+    f.close()
+    return True
+
 if __name__ == "__main__":
 
     if len(sys.argv) == 1:
         print("Too few arguments!\n")
         exit_with_usage()
-        
+
+    if not handle_only_one_job_in_execution():
+        print("Lock file is present (%d). Either a job is currently running, or a the lock file from a previous job was not correctly removed." % lock_file)
+        sys.exit()
+
     jobs = parse_jobs(sys.argv[1])
 
     # Setup directories for storing pcap and log files
@@ -339,5 +353,5 @@ if __name__ == "__main__":
     print_t("Execution of %s finished at %s" % (settings["test_name"], str(end_time)))
     print_t("Test executed in ", str((end_time - start_time)))
 
-
+    os.remove(lock_file)
 
