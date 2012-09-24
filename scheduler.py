@@ -20,6 +20,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
+# Leaves 'print "string"' format absolete
 from __future__ import print_function
 
 """This program runs a sequence of commands on remote hosts using SSH.
@@ -43,11 +44,34 @@ SSH_NEWKEY = '(?i)are you sure you want to continue connecting'
 lock_file = "%s/sshscheduler.lock" % os.getenv("HOME")
 
 from threading import Thread
+import thread, threading
+
+print_lock = threading.Lock()
 
 def print_t(*arg):
-    import thread, threading
-    print("%s: " % threading.current_thread().name, end="")
-    print(*arg)
+    print_lock.acquire() # will block if lock is already held
+    arg = list(arg)
+
+    # Handles newlines and beginning and end of format string so it looks better with the Thread name printed
+    newline_count = 0
+    if len(arg) > 0:
+        # Removing leading newlines
+        while arg[0][0] == "\n":
+            print()
+            arg[0] = arg[0][1:]
+            if arg[0] is "":
+                break
+        # Count newlines at the end, and remove them
+        while arg[0][-1] == "\n":
+            newline_count += 1
+            arg[0] = arg[0][:-1]
+
+    if not (len(arg) == 1 and len(arg[0]) == 0):
+        print("%10s: " % threading.current_thread().name, end="")
+        print(*arg)
+    if newline_count:
+        print("\n" * newline_count)
+    print_lock.release()
 
 class Job(Thread):
 
@@ -67,9 +91,11 @@ class Job(Thread):
             self.timeout = host_conf["timeout"]
 
     def kill(self):
-        self.child.kill(15)
+        if hasattr(self, 'child'):        
+            self.child.kill(15)
 
     def run(self):
+        self.name = threading.current_thread().name
         
         if self.conf["type"] == "ssh":
             self.child = self.ssh_login("root", self.host)
@@ -112,13 +138,13 @@ class Job(Thread):
                 print_t("Exception==========\n%s\n===========" % str(e))
                 pass
             # Print terminal prints
-            print_t("\nJob output on '%s' :\n%s\n" % (self.host, child.after))
+            print_t("\nJob output on '%s': '%s'" % (self.host, child.after))
 
         print_t("Jobs on host %s has finished. Exiting host" % self.host)
 
         # Now exit the remote host.
         child.sendline('exit')
-        index = child.expect([pexpect.EOF, "(?i)there are stopped jobs"])
+        index = child.expect([pexpect.EOF, "(?i)there are stopped jobs", ""])
         if index == 1:
             child.sendline("exit")
             child.expect(pexpect.EOF)
@@ -137,7 +163,7 @@ class Job(Thread):
         print_t("Connecting to host '%s' with timeout '%s'" % (host, str(self.timeout)))
         
         ssh = "ssh %s" % (host)
-        print_t("cmd:" + ssh)
+        #print_t("cmd:" + ssh)
         child = pexpect.spawn(ssh, timeout=self.timeout, maxread=100, searchwindowsize=100)
         
         if self.logfile:
@@ -249,8 +275,8 @@ def abort_job():
 def kill_threads(threads_list):
     for t in threads_list:
         try:
-            print_t("read_nonblocking: %s : %s", (t.host, str(t.commands)))
-            if t.conf["type"] == "ssh":
+            print_t("read_nonblocking: %s : %s" % (t.host, str(t.commands)))
+            if hasattr(t, 'child'):
                 t.child.read_nonblocking(size=1000, timeout=0)
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
             #print_t("Exception: %s : %s" % (type(e), e))
@@ -279,12 +305,32 @@ def join_current_threads():
     return True
 
 def handle_only_one_job_in_execution():
-    print("lock_file:", lock_file)
     if os.path.isfile(lock_file):
-        return False
+        f = open(lock_file, 'r')
+        content = f.read()
+        f.close()
+        return content
     f = open(lock_file, 'w+')
+    date = datetime.now().strftime("%Y-%m-%d-%H%M-%S")
+    f.write("Test name: %s\n" % settings["test_name"])
+    f.write("Started at: %s\n" % date)
     f.close()
-    return True
+    return None
+
+def setup_log_directories():
+    # Setup directories for storing pcap and log files
+    job_date = datetime.now().strftime("%Y-%m-%d-%H%M-%S")
+    jobname_dir = "%s/%s" % (settings["pcap_dir"], settings["test_name"])
+    pcap_dir = "%s/%s" % (jobname_dir, job_date)
+    log_dir = "%s/logs" % pcap_dir
+    last_dir = "%s/last" % jobname_dir
+    os.makedirs(log_dir)
+    try:
+        os.makedirs(last_dir)
+    except:
+        pass
+    return pcap_dir, log_dir, last_dir
+
 
 if __name__ == "__main__":
 
@@ -292,20 +338,20 @@ if __name__ == "__main__":
         print("Too few arguments!\n")
         exit_with_usage()
 
-    if not handle_only_one_job_in_execution():
-        print("Lock file is present (%d). Either a job is currently running, or a the lock file from a previous job was not correctly removed." % lock_file)
-        sys.exit()
-
     jobs = parse_jobs(sys.argv[1])
 
-    # Setup directories for storing pcap and log files
-    job_date = datetime.now().strftime("%Y-%m-%d-%H%M-%S")
-    pcap_dir = "%s/%s/%s" % (settings["pcap_dir"], settings["test_name"], job_date)
-    log_dir = "%s/logs" % pcap_dir
-    os.makedirs(log_dir)
+    if handle_only_one_job_in_execution() is not None:
+        print("Lock file is present (%s). Either a job is currently running, "
+              "or a the lock file from a previous job was not correctly removed." % lock_file)
+        f = open(lock_file, "r")
+        print("Lock file content:", f.read())
+        f.close()
+        sys.exit()
+
+    pcap_dir, log_dir, last_dir = setup_log_directories()
 
     start_time = datetime.now()
-    print_t("Starting jobs at ", str(start_time))
+    print("\nStarting test '%s' at %s" % (settings["test_name"], str(start_time)))
 
     current_index = 0
     for i in range(len(jobs)):
@@ -324,7 +370,7 @@ if __name__ == "__main__":
         elif job[0].has_key("sleep"):
             sleep(float(job[0]["sleep"]))
         elif job[0].has_key("wait"):
-            print_t("WAIT - waiting for threads")
+            print_t("\nWAIT - waiting for threads")
             # Wait for all previous jobs before continuing
             if join_current_threads():
                 # Job was not aborted by SIGTERM. Kill the jobs denoted with kill
@@ -332,15 +378,14 @@ if __name__ == "__main__":
                 kill_threads(threads_to_kill)
                 break
             else:
-                print()
-                print_t("Test interrupted by CTRL-c!\n")
+                print_t("\nTest interrupted by CTRL-c!\n")
                 abort_job()
                 break
                
     end_time = datetime.now()
 
     # Gather results
-    print()
+    print_t("\nTEST HAS FINISHED - GATHERING RESULTS")
     print_t("Saving pcap files to:", pcap_dir)
 
     threads = []
@@ -352,10 +397,13 @@ if __name__ == "__main__":
         t.start()
 
     join_current_threads()
+    
+    # Copy results to last directory
+    cmd = "rm -f %s/*.pcap && rm -f %s/logs/* && cp -R %s/* %s/" % (last_dir, last_dir, pcap_dir, last_dir)
+    out = os.popen(cmd).read()
 
-    print()
-    print_t("Execution of %s finished at %s" % (settings["test_name"], str(end_time)))
+    print_t("\nExecution of '%s' finished at %s" % (settings["test_name"], str(end_time)))
     print_t("Test executed in ", str((end_time - start_time)))
-
+    
     os.remove(lock_file)
-
+ 
