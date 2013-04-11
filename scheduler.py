@@ -38,6 +38,8 @@ from time import sleep
 from threading import Thread
 import thread, threading
 
+import pxssh
+
 DEFAULT_COMMAND_PROMPT = '[#$] ' ### This is way too simple for industrial use -- we will change is ASAP.
 PEXPECT_COMMAND_PROMPT = "\[PEXPECT\]#"
 
@@ -48,63 +50,95 @@ SSH_NEWKEY = '(?i)are you sure you want to continue connecting'
 
 lock_file = "%s/sshscheduler.lock" % os.getenv("HOME")
 
-print_lock = threading.Lock()
-verbose = False
 settings = None
-
 threads = []
 threads_to_kill = []
-aborted = False
+stopped = False
 gather_results = True
+sigint_ctrl = False
+print_t = None
 
+class StdoutSplit:
+    """Write string to both stdout and terminal log file"""
 
-def print_t(*arg, **kwargs):
-    global verbose
+    def __init__(self):
+        self.content = []
+        self.stdout = sys.stdout
+        self.verbose = False
+        self.print_lock = threading.Lock()
+        self.terminal_output_log = None
 
-    print_lock.acquire() # will block if lock is already held
-    arg = list(arg)
+    def write(self, string):
+        print(string, file=self.stdout, end="")
+        if self.terminal_output_log:
+            print(string, file=self.terminal_output_log, end="")
 
-    if "verbose" in kwargs:
-        if kwargs["verbose"] and not verbose:
-            print_lock.release()
-            return
+    def print_t(self, *arg, **kwargs):
+        """
+        Thread safe function that prints the values prefixed with a timestamp and the
+        ID of the calling thread. Output is written to stdout and terminal log file
+        """
+        self.print_lock.acquire() # will block if lock is already held
+        arg = list(arg)
 
-    # Handles newlines and beginning and end of format string so it looks better with the Thread name printed
-    newline_count = 0
-    if len(arg) > 0:
-        # Removing leading newlines
-        while arg[0][0] == "\n":
-            print()
-            arg[0] = arg[0][1:]
-            if arg[0] is "":
-                break
-        # Count newlines at the end, and remove them
-        while arg[0][-1] == "\n":
-            newline_count += 1
-            arg[0] = arg[0][:-1]
+        if "verbose" in kwargs:
+            if kwargs["verbose"] and not self.verbose:
+                self.print_lock.release()
+                return
 
-    if not (len(arg) == 1 and len(arg[0]) == 0):
-        import datetime
-        t = datetime.datetime.now()
-        t = "%s:%3d" % (t.strftime("%H:%M:%S"), t.microsecond/1000)
-        print("%s | %10s: " % (t, threading.current_thread().name), end="")
-        if "color" in kwargs:
-            try:
-                from termcolor import colored, cprint
-                cprint(*arg, color=kwargs["color"])
-            except Exception, e:
-                print("cprint failed")
-                import traceback
-                traceback.print_exc()
-                for a in arg:
-                    print("Arg:", a)
+        # Handles newlines and beginning and end of format string so it looks better with the Thread name printed
+        newline_count = 0
+        if len(arg) > 0:
+            # Removing leading newlines
+            if len(arg[0]) > 0:
+                while arg[0][0] == "\n":
+                    print()
+                    arg[0] = arg[0][1:]
+                    if arg[0] is "":
+                        break
+                # Count newlines at the end, and remove them
+                while arg[0][-1] == "\n":
+                    newline_count += 1
+                    arg[0] = arg[0][:-1]
+
+        if not (len(arg) == 1 and len(arg[0]) == 0):
+            import datetime
+            t = datetime.datetime.now()
+            t = "%s:%03d" % (t.strftime("%H:%M:%S"), t.microsecond/1000)
+            t_out = "%s | %10s: " % (t, threading.current_thread().name)
+
+            print(t_out, end="")
+
+            # Ugly hack ;-)
+            while True:
+                if "color" in kwargs:
+                    from termcolor import colored, cprint
+                    if len(arg) > 1:
+                        cprint("When using colors, print only accepts one string argument, %d was given!" % len(arg), color='red')
+                        import traceback
+                        traceback.print_stack()
+                    else:
+                        try:
+                            cprint(*arg, color=kwargs["color"])
+                            self.terminal_output_log.write(t_out)
+                            break
+                        except Exception, e:
+                            print("cprint failed")
+                            import traceback
+                            traceback.print_exc()
+                            for a in arg:
+                                print("Arg:", a)
                 print(*arg)
-        else:
-            print(*arg)
+                break
 
-    if newline_count:
-        print("\n" * newline_count)
-    print_lock.release()
+        if newline_count:
+            print("\n" * newline_count)
+        self.print_lock.release()
+
+
+# Replace stdout with StdoutSplit
+sys.stdout = StdoutSplit()
+print_t = sys.stdout.print_t
 
 class Job(Thread):
 
@@ -115,6 +149,7 @@ class Job(Thread):
         self.commands = commands
         self.timeout = 30 # Default timeout of 30 seconds
         self.login_timeout = 10
+        self.killed = False
 
         self.logfile = None
         if host_conf.has_key("logfile"):
@@ -125,6 +160,9 @@ class Job(Thread):
 
     def kill(self):
         if hasattr(self, 'child'):
+            self.killed = True
+            # Necessary to shut down server process that's still running
+            self.child.close(force=True)
             self.child.kill(15)
 
     def run(self):
@@ -137,27 +175,28 @@ class Job(Thread):
                 return
             result = self.execute_commands(self.child, self.commands)
         elif self.conf["type"] == "scp":
-            scp_cmd = "scp %s:%s %s/%s" % (self.host, self.conf["filename"], self.conf["target_dir"], self.conf["target_filename"])
+            target_file = "%s/%s" % (self.conf["target_dir"], self.conf["target_filename"])
+            link_file = "%s/%s" % (self.conf["log_dir"], self.conf["target_filename"])
+            scp_cmd = "scp %s:%s %s" % (self.host, self.conf["filename"], target_file)
             print_t("Executing scp command: %s" % scp_cmd)
             result = pexpect.run(scp_cmd, withexitstatus=True)
             print_t("Result:", result, verbose=True)
             if result[1] != 0:
                 print_t("Command returned with exit status: %s" % str(result[1]), color='red')
+            else:
+                scp_cmd = "ln %s %s" % (target_file, link_file)
+                result = pexpect.run(scp_cmd, withexitstatus=True)
 
     def execute_commands(self, child, commands):
         for c in commands:
             command = "/bin/bash -c '%s'" % c["command"]
-            print_t("Executing on %s: %s" % (self.host, command))
-            if aborted:
-                print_t("Aborted!", color='red')
+            print_t("Executing on %-14s: %s" % (self.host, command))
+            if stopped:
+                print_t("STOPPED!", color='red')
                 return
             try:
                 child.sendline(command)
 
-                if "exit" in self.conf and self.conf["exit"]:
-                    child.sendline("exit")
-
-                child.wait()
                 try:
                     # Read the output from the command (Goes to the log)
                     child.read_nonblocking(size=1000, timeout=0)
@@ -166,15 +205,58 @@ class Job(Thread):
             except Exception, e:
                 print_t("Exception==========\n%s\n===========" % str(e))
                 pass
-            # Print terminal prints
-            print_t("Job output on '%s': '%s'" % (self.host, child.after), verbose=True)
 
-        print_t("Jobs on host %s has finished. Exiting host" % self.host)
-
-        index = child.expect([pexpect.EOF, "(?i)there are stopped jobs", ""])
-        if index == 1:
+        if "exit" in self.conf and self.conf["exit"]:
             child.sendline("exit")
-            child.expect(pexpect.EOF)
+
+        # Wait for (bash) process to exit
+        child.wait()
+
+        if not self.killed:
+            try:
+                # Read the output to log. Necessary to get the output
+                child.read_nonblocking(size=1000, timeout=0)
+                child.close()
+            except (OSError, pexpect.EOF), e:
+                print_t("OSError:", e, verbose=True)
+
+        if child.exitstatus != 0:
+            should_be_killed = self.conf.has_key("kill") and self.conf["kill"]
+            if child.exitstatus == 130:
+                # As expected
+                if should_be_killed:
+                    print_t("Command '%s' on '%s' was killed" % (commands[len(commands) -1]["command"], self.host), color='green')
+                    pass
+                else:
+                    if not self.killed:
+                        print_t("Command '%s' on '%s' was killed by CTRL-c (Status: %d)" % (commands[len(commands) -1]["command"], self.host, child.exitstatus), color='red')
+                    else:
+                        if sigint_ctrl:
+                            print_t("Command '%s' on '%s' was killed by the script. (Session aborted with CTRL-c by user) (Status: %d)" % \
+                                        (commands[len(commands) -1]["command"], self.host, child.exitstatus), color='green')
+                        else:
+                            print_t("Command '%s' on '%s' was killed by the script, but that is not as expected. (Status: %d)" % \
+                                        (commands[len(commands) -1]["command"], self.host, child.exitstatus), color='red')
+            else:
+                print_t("Command '%s' on '%s' exited with status: %d" % (commands[len(commands) -1]["command"], self.host, child.exitstatus), color='red')
+                if should_be_killed:
+                    print_t("Command output:", child.before)
+                    if not stopped:
+                        print_t("This command was not expected to exit. Aborting session!", color='red')
+                        abort_job(results=False)
+                else:
+                    if not self.killed:
+                        pass
+
+        if child.signalstatus:
+            print_t("Command '%s' on '%s' was killed with signal: %d" % (commands[len(commands) -1]["command"], self.host, child.signalstatus), color='red')
+
+        print_t("Jobs on host %-14s has finished. Exiting host" % self.host)
+
+        #index = child.expect([pexpect.EOF, "(?i)there are stopped jobs", ""])
+        #if index == 1:
+        #    child.sendline("exit")
+        #    child.expect(pexpect.EOF)
 
     def ssh_login(self, user, host):
         #
@@ -190,16 +272,11 @@ class Job(Thread):
         print_t("Connecting to host '%s' with timeout '%s'" % (host, str(self.timeout)), verbose=True)
 
         ssh = "ssh %s" % (host)
-        maxread = 100
-        if "print" in self.conf and self.conf["print"]:
-            maxread = 101
-
-        child = pexpect.spawn(ssh, timeout=self.timeout, maxread=maxread, searchwindowsize=100)
+        child = pexpect.spawn(ssh, timeout=self.timeout, searchwindowsize=100)
 
         if self.logfile:
-            fout = file(os.path.join(self.conf["log_dir"] , self.logfile), "w")
+            fout = file(os.path.join(self.conf["log_dir"], self.logfile), "w")
             child.logfile = fout
-            #print_t("Using logfile:", self.logfile)
 
         i = child.expect([pexpect.TIMEOUT, SSH_NEWKEY, DEFAULT_COMMAND_PROMPT, '(?i)password'])
 
@@ -233,7 +310,6 @@ class Job(Thread):
         child.sendline ("PS1='[PEXPECT]# '")
 
         i = child.expect([pexpect.TIMEOUT, PEXPECT_COMMAND_PROMPT], timeout=10)
-        #print_t("RETURNED1:", child.before)
         if i == 0:
             print_t("# Couldn't set sh-style prompt -- trying csh-style.")
             child.sendline ("set prompt='[PEXPECT]# '")
@@ -280,25 +356,28 @@ def parse_jobs(filename):
             job = None
         elif d.has_key("settings"):
             settings = d
+            if not "test_name" in settings:
+                settings["test_name"] = os.path.splitext(filename)[0]
 
     # Add last job
     if job is not None:
         jobs.append(job)
+
     return jobs
 
 
 def abort_job(results=True):
-    global aborted, gather_results
-    aborted = True
+    global stopped, gather_results
+    stopped = True
     gather_results = results
     print_t("Jobs to kill: %s" % (len(threads) + len(threads_to_kill)), color='red')
-    kill_threads(threads)
     kill_threads(threads_to_kill)
+    kill_threads(threads)
 
 def kill_threads(threads_list):
     for t in threads_list:
         try:
-            if hasattr(t, 'child'):
+            if hasattr(t, 'child') and t.child.isalive():
                 t.child.read_nonblocking(size=1000, timeout=0)
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
             #print_t("Exception: %s : %s" % (type(e), e))
@@ -306,24 +385,35 @@ def kill_threads(threads_list):
             # pexpect.EOF raised when it reads EOF
             pass
         print_t("Killing thread '%s' running command %s : %s" % (t.name, t.host, str(t.commands)), verbose=True)
+        # Kills the pexpect child
         t.kill()
 
 def join_current_threads():
     global threads
-    print_t("\nJOINING threads (%d): %s" % (len(threads), str(threads)), verbose=True)
+    ret = join_threads(threads)
+    threads = []
+    return ret
+
+def join_threads(threads):
+    print_t("Joining threads (%d): %s" % (len(threads), str(threads)), verbose=True)
     for t in threads:
         print_t("Join thread:", t.name, verbose=True)
-        while t.isAlive():
+        while True:
             try:
-                t.join(1)
+                # Thread hasn't beens started yet
+                #if t.get_ident() is None:
+                if t.ident is None:
+                    sleep(1)
+                else:
+                    t.join(1)
+                    if not t.isAlive():
+                        break
             except KeyboardInterrupt, e:
-                print_t("Exception", str(e))
-                print_t("SIGTERM Received")
+                print_t("SIGTERM Received", color='red', verbose=True)
                 return False
     for t in threads:
         if t.isAlive():
             print_t("THREAD IS STILL ALIVE:", t.name)
-    threads = []
     return True
 
 def handle_only_one_job_in_execution():
@@ -361,7 +451,7 @@ if __name__ == "__main__":
     args = argparser.parse_args()
 
     if args.verbose:
-        verbose = True
+        sys.stdout.verbose = True
 
     jobs = parse_jobs(args.file)
 
@@ -375,15 +465,17 @@ if __name__ == "__main__":
 
     pcap_dir, log_dir, last_dir = setup_log_directories()
 
-    cmd = "rm %s/*" % (last_dir)
+    cmd = "rm -f %s/*" % (last_dir)
     out = os.popen(cmd).read()
 
+    sys.stdout.terminal_output_log = open(os.path.join(last_dir, "terminal.log"), 'w+')
+
     start_time = datetime.now()
-    print("\nStarting test '%s' at %s" % (settings["test_name"], str(start_time)))
+    print_t("Starting session '%s' at %s" % (settings["test_name"], str(start_time)))
 
     current_index = 0
     for i in range(len(jobs)):
-        if aborted:
+        if stopped:
             break
         current_index = i
         job = jobs[i]
@@ -398,21 +490,29 @@ if __name__ == "__main__":
             else:
                 threads.append(t)
             t.start()
+            # We must wait on this job immediately before continuing
+            if job[0].has_key("wait") and job[0]["wait"]:
+                join_threads([t])
+
         elif job[0].has_key("sleep"):
             try:
                 sleep(float(job[0]["sleep"]))
             except KeyboardInterrupt, i:
                 abort_job(results=False)
         elif job[0].has_key("wait"):
-            print_t("\nWAIT - waiting for threads", verbose=True)
+            print_t("Waiting for threads", color='green', verbose=True)
             # Wait for all previous jobs before continuing
             if join_current_threads():
                 # Job was not aborted by SIGTERM. Kill the jobs denoted with kill
                 print_t("Jobs completed uninterupted. Killing threads: %d" % len(threads_to_kill), color='green')
+                # Sleep to let remaining packets arrive before killing tcpdump
+                sleep(1)
+                stopped = True
                 kill_threads(threads_to_kill)
                 break
             else:
-                print_t("\nTest interrupted by CTRL-c!\n", color='red')
+                print_t("Test interrupted by CTRL-c!", color='red')
+                sigint_ctrl = True
                 abort_job()
                 break
 
@@ -420,28 +520,36 @@ if __name__ == "__main__":
 
     if gather_results:
         # Gather results
-        print_t("\nTEST HAS FINISHED - GATHERING RESULTS", color='green')
-        print_t("Saving pcap files to:", pcap_dir)
+        print_t("Session has finished", color='green')
 
-        threads = []
-        for i in range(current_index + 1, len(jobs)):
-            job = jobs[i]
-            job[0]["target_dir"] = pcap_dir
-            t = Job(job[0], None)
-            threads.append(t)
-            t.start()
+        if current_index + 1 != len(jobs):
+            print_t("Saving pcap files to:", pcap_dir)
 
-        if not join_current_threads():
-            print("Last join interrupted by CTRL-c")
+            threads = []
+            for i in range(current_index + 1, len(jobs)):
+                job = jobs[i]
+                job[0]["target_dir"] = pcap_dir
+                job[0]["log_dir"] = last_dir
+                t = Job(job[0], None)
+                threads.append(t)
+                t.start()
 
-        # Copy results to proper directory
-        #cmd = "rm -f %s/*.pcap && rm -f %s/logs/* && cp -R %s/* %s/" % (last_dir, last_dir, pcap_dir, last_dir)
-        cmd = "cp %s/* %s/" % (last_dir, log_dir)
-        out = os.popen(cmd).read()
+            if not join_current_threads():
+                print_t("Last join interrupted by CTRL-c")
 
-        print_t("\nExecution of '%s' finished at %s" % (settings["test_name"], str(end_time)), color='blue')
-        print_t("Test executed in %s seconds." % str((end_time - start_time)), color='blue')
+            # Copy logs to proper directory
+            cmd = "cp %s/*.log %s/" % (last_dir, log_dir)
+            out = os.popen(cmd).read()
+
+        print_t("=====================================================================================", color='blue')
+        print_t("Execution of '%s' finished at %s" % (settings["test_name"], str(end_time)), color='blue')
+        print_t("Session executed in %s seconds." % str((end_time - start_time)), color='blue')
+        print_t("=====================================================================================", color='blue')
     else:
-        print("Session was aborted before being started. No results gathered")
+        print_t("Session was aborted before being started. No results gathered")
 
+    print_t("Waiting for threads to kill", verbose=True)
+    join_threads(threads_to_kill)
+
+    sys.stdout.terminal_output_log.close()
     os.remove(lock_file)
