@@ -1,39 +1,44 @@
-# Define jobs where first line defines the host, and consecutive 
-# lines defining commands to run on that host
+# -*- python -*-
+# Define settings and jobs with python dictionaries
 
 # default_timeout set to expected number of seconds, or None for no timeout
-# test_name - The name of the test. Results will be saved to a directory with this name
+# test_name - The name of the test
 
-# Set to expected number of seconds, or None for no timeout
-{"settings": "", "default_timeout" : None, "pcap_dir" : "pcap", "test_name": "simple_job"}
+# Send from rdbsender to zreceiver
 
-# When kill is set to True, the connection to this host will be closed when other jobs are finished 
-# 'expect' is a string the command prints to terminal when it's finished. When this string is found, the job is done
+{"settings": "", "default_timeout" : None, "pcap_dir" : "pcap", "test_name": "rdbsender_to_zreceiver" }
 
-# manager tcpdump
-{"type" : "ssh", "host" : "root@manager", "logfile" : "manager_pcap.log", "kill" : True}
-{"command" : "tcpdump -i eth0 -nn -w manager.pcap"}
+# Setup tcpdump for zreceiver
 
-# polk tcpdump 
-{"type" : "ssh", "host" : "root@polk", "logfile" : "polk_pcap.log", "kill" : True}
-{"command" : "tcpdump -i eth0 -nn -w pcap.pcap"}
+{"host" : "root@zreceiver", "logfile" : "zreceiver_tcpdump.log", "type" : "ssh", "kill" : True }
+{"command" : "tcpdump -i eth1 -nn -w test.pcap" }
 
-# Wait 1 second for tcpdump to setup
+{"host" : "root@rdbsender", "logfile" : "rdbsender_tcpdump.log", "type" : "ssh", "kill" : True }
+{"command" : "tcpdump -i eth1 -nn -w test.pcap" }
+
+# Wait for tcpdump to setup
 {"sleep" : "1" }
 
-{"type" : "ssh", "host" : "root@manager", "logfile" : "manager.log", "kill" : True }
-{"command" : "/root/streamzero_srv -p 5000"}
+{"host" : "root@zreceiver", "logfile" : "zreceiver.log", "type" : "ssh", "kill" : True, "exit": True }
+{"command" : "/root/streamzero_srv -p 5000 -A" }
 
-# Wait 1 second for servers
+{"host" : "root@zreceiver", "logfile" : "zreceiver2.log", "type" : "ssh", "kill" : True, "exit": True }
+{"command" : "/root/streamzero_srv -p 5001 -A" }
+
+# Wait for servers to start up
 {"sleep" : "1" }
 
-{"type" : "ssh", "host" : "root@polk", "timeout": 20, "logfile" : "polk.log"}
-{"command" : "/root/streamzero_client -s 192.168.100.174 -p 5000 -zx -d 10 -I d:2,b:5,S:40:10", "expect" : "Finished..."}
+{"host" : "root@rdbsender", "id": "thin-rdb", "logfile" : "rdbsender.log", "type" : "ssh", "print" : True, "exit" : True }
+{"command" : "/root/streamzero_client -s 10.0.0.13 -p 5000 -P 15001 -z -x -r -d 30 -l -I d:2,i:80,S:100 -v2 -c 1" }
 
+{"host" : "root@rdbsender", "logfile" : "rdbsender.log", "type" : "ssh", "print" : True, "exit" : True }
+{"command" : "/root/streamzero_client -s 10.0.0.13 -p 5001 -P 16001 -z -x    -d 30 -l -I d:2,i:80,S:100 -v2 -c 1" }
+
+# Wait for jobs (threads) to finish
 {"wait" : ""}
 
-# Copy pcap files. The files will be deleted on the remote host
-
-{"type" : "scp", "host" : "root@polk", "filename": "pcap.pcap", "target_filename": "sender.pcap", "logfile" : "polk_scp.log"}
-{"type" : "scp", "host" : "root@manager", "filename": "manager.pcap", "target_filename": "receiver.pcap", "logfile" : "manager_scp.log"}
+# Copy pcap files
+{"type" : "scp", "host" : "root@zreceiver", "filename": "test.pcap",  "target_filename": "zreceiver.pcap",   "logfile" : "zreceiver_scp.log"}
+{"type" : "scp", "host" : "root@rdbsender", "filename": "test.pcap",  "target_filename": "rdbsender.pcap",   "logfile" : "rdbsender_scp.log"}
+{"type" : "scp", "host" : "root@rdbsender", "filename": "ftrace.log", "target_filename": "rdbsender.ftrace", "logfile" : "rdbsender_scp_ftrace.log"}
 
