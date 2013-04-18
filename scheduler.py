@@ -280,7 +280,13 @@ class Job(Thread):
             self.logfile.print_to_stdout = print_output
             command = c["command"]
             if self.session_job_conf and c.has_key("substitute_id"):
-                command = command % self.session_job_conf["substitutions"][c["substitute_id"]]
+                #print_t("Substituting into '%s' : '%s'" % (command, self.session_job_conf["substitutions"][c["substitute_id"]]))
+                try:
+                    command = command % self.session_job_conf["substitutions"][c["substitute_id"]]
+                except KeyError, k:
+                    print_t("Encountered KeyError when inserting subsitution settings: %s" % k, color="red")
+                    abort_job(results=False, fatal=True)
+                    sys.exit(1)
 #            command = "/bin/bash -c '%s'" % command
             self.last_command = command
 
@@ -729,7 +735,22 @@ def parse_job_conf(filename):
                 settings["session_name"] = os.path.splitext(filename)[0]
         elif d.has_key("session_jobs"):
             session_jobs = d
+            for sj in d["session_jobs"]:
+                if not "substitutions" in sj:
+                    continue
+                for sub in sj["substitutions"].keys():
+                    # If it refers to default settings, add these to the settings dict
+                    if "default_settings" in d:
+                        # Exists on both default settings and sub
+                        if sub in d["default_settings"]:
+                            sub_settings = d["default_settings"][sub].copy()
+                            sub_settings.update(sj["substitutions"][sub])
+                            sj["substitutions"][sub] = sub_settings
 
+                        diff = set(d["default_settings"].keys()) - set(sj["substitutions"].keys())
+                        for key in diff:
+                            # Only in default settings, so add to sub
+                            sj["substitutions"][key] = d["default_settings"][key]
     if eval_lines:
         print_t("You have a syntax error in the job config!", color="red")
         print_t("Failed to parse config lines: %s" % eval_lines, color="red")
