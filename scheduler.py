@@ -53,6 +53,7 @@ lock_file = "%s/sshscheduler.lock" % os.getenv("HOME")
 settings = { "simulate": False, "default_user": None }
 default_job_conf = { "color": None, "print_output": False, "command_timeout": None, "wait_on_commands": False, "user": None }
 default_command_conf = { "command_timeout": None }
+default_session_conf = { "name_id": None, }
 
 session_jobs = None
 threads = []
@@ -309,7 +310,7 @@ class Job(Thread):
                     abort_job(results=False, fatal=True)
                     sys.exit(1)
             # Execute commands in separate bash? Need if using pipes..
-#            command = "/bin/bash -c '%s'" % command
+            command = "/bin/bash -c '%s'" % command
             self.last_command = command
 
             if print_commands:
@@ -554,11 +555,11 @@ def handle_only_one_job_in_execution():
     return None
 
 def setup_log_directories():
-    # Setup directories for storing pcap and log files
+    # Setup directories for storing results and log files
     job_date = datetime.now().strftime("%Y-%m-%d-%H%M-%S")
-    jobname_dir = "%s/%s" % (settings["pcap_dir"], settings["session_name"])
-    pcap_dir = "%s/%s" % (jobname_dir, job_date)
-    log_dir = "%s/logs" % pcap_dir
+    jobname_dir = "%s/%s" % (settings["results_dir"], settings["session_name"])
+    results_dir = "%s/%s" % (jobname_dir, job_date)
+    log_dir = "%s/logs" % results_dir
     last_dir = "%s/last" % jobname_dir
     last_log_dir = "%s/log" % last_dir
     os.makedirs(log_dir)
@@ -566,7 +567,7 @@ def setup_log_directories():
         os.makedirs(last_log_dir)
     except:
         pass
-    return pcap_dir, log_dir, last_dir, last_log_dir
+    return results_dir, log_dir, last_dir, last_log_dir
 
 
 def run_session_job(session_job_conf, jobs):
@@ -607,9 +608,15 @@ def run_session_job(session_job_conf, jobs):
             except KeyboardInterrupt, i:
                 abort_job(results=False)
         elif job[0].has_key("wait"):
-            print_t("Waiting for jobs with timeout: %s" % str(s["timeout_secs"]), color='green', verbose=1)
+            timeout = None
+            if session_job_conf:
+                timeout = session_job_conf["timeout_secs"]
+                print_t("Waiting for jobs with timeout: %s" % str(session_job_conf["timeout_secs"]), color='green', verbose=1)
+            else:
+                print_t("Waiting for jobs", color='green', verbose=1)
+
             # Wait for all previous jobs before continuing
-            if join_current_threads(timeout=s["timeout_secs"]):
+            if join_current_threads(timeout=timeout):
                 # Job was not aborted by SIGTERM. Kill the jobs denoted with kill
                 print_t("Jobs completed uninterupted. Killing threads: %d" % len(threads_to_kill), color='green')
                 # Sleep to let remaining packets arrive before killing tcpdump
@@ -627,10 +634,11 @@ def run_session_job(session_job_conf, jobs):
 
     if gather_results:
         # Gather results
-        print_t("Session job '%s' has finished." % session_job_conf["name_id"], color='green')
+        if session_job_conf:
+            print_t("Session job '%s' has finished." % session_job_conf["name_id"], color='green')
 
         if current_index + 1 != len(jobs):
-            print_t("Saving pcap files to: %s" % pcap_dir, color="green")
+            print_t("Saving files to: %s" % results_dir, color="green")
             threads = []
             stopped = False
             for i in range(current_index + 1, len(jobs)):
@@ -651,7 +659,7 @@ def run_session_job(session_job_conf, jobs):
                 if session_job_conf and session_job_conf["name_id"]:
                     target_filename = "%s_%s" % (session_job_conf["name_id"], target_filename)
 
-                target_file = "%s/%s" % (pcap_dir, target_filename)
+                target_file = "%s/%s" % (results_dir, target_filename)
                 link_file = "%s/%s" % (last_dir, target_filename)
                 host, user = get_host_and_user(conf["remote_host"], conf["user"])
                 scp_cmd = "scp %s@%s:%s %s" % (user, host, conf["filename"], target_file)
@@ -751,6 +759,8 @@ def parse_job_conf(filename):
         elif d.has_key("session_jobs"):
             session_jobs = d
             for sj in d["session_jobs"]:
+                if not "timeout_secs" in sj:
+                    sj["timeout_secs"] = d["default_session_job_timeout_secs"]
                 if not "substitutions" in sj:
                     continue
                 for sub in sj["substitutions"].keys():
@@ -849,7 +859,7 @@ if __name__ == "__main__":
         f.close()
         sys.exit()
 
-    pcap_dir, log_dir, last_dir, last_log_dir = setup_log_directories()
+    results_dir, log_dir, last_dir, last_log_dir = setup_log_directories()
     sys.stdout.output_file = open(os.path.join(last_log_dir, "terminal.log"), 'w+')
 
     cmd = "rm -f %s/*.* %s/*.*" % (last_dir, last_log_dir)
@@ -860,9 +870,7 @@ if __name__ == "__main__":
 
     # session_jobs defined in config
     if session_jobs:
-        for i, s in enumerate(session_jobs["session_jobs"]):
-            if not "timeout_secs" in s:
-                s["timeout_secs"] = session_jobs["default_session_job_timeout_secs"]
+        for i, session_job in enumerate(session_jobs["session_jobs"]):
             if fatal_abort or sigint_ctrl:
                 break
             stopped = False
@@ -871,7 +879,7 @@ if __name__ == "__main__":
                 print_t("Sleeping %d seconds before next session job." % session_jobs["delay_between_session_jobs_secs"])
                 if not settings["simulate"]:
                     time.sleep(session_jobs["delay_between_session_jobs_secs"])
-            run_session_job(s, jobs)
+            run_session_job(session_job, jobs)
     else:
         run_session_job(None, jobs)
 

@@ -56,6 +56,7 @@
 
 # Setup netem
 
+# 'wait' here means that this job must finish before we continue
 {"host" : "root@bridge2", "logfile" : "bridge2.log", "type" : "ssh", "wait": True }
 {"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
 {"command" : "tc qdisc del dev eth1 root" }

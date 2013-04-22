@@ -9,26 +9,24 @@
 {"settings": "",
  "pcap_dir": "pcap", # Root dir of where to save pcap and log files
  "session_name": "rdbsender_to_zreceiver",
- "simulate": False # Simulate will not execute the commands
+ "simulate": False, # Simulate will not execute the commands
+ "default_user": "root"
  }
 
 {"delay_between_session_jobs_secs": 4,
  "default_session_job_timeout_secs": None, # This is the total timeout for all the commands of one session job
  "session_jobs": [
-{"description": "70 thin vs 70 thin rdb streams",
- "name_id": "70thin_vs_70thin_rdb",
-# "timeout_secs": 20, # Global timeout for this session job
- "substitutions": { "thin-rdb": { "thread_count": "70", }, "thin": { "thread_count": "70" } }
- },
-{"description": "2 thin vs 2 thin rdb streams",
-"name_id": "2thin_vs_2thin_rdb",
- "substitutions": { "thin-rdb": { "thread_count": "2", }, "thin": { "thread_count": "2" } }
- },
-{"description": "1 thin vs 1 thin rdb streams",
- "name_id": "1thin_vs_1thin_rdb",
- "substitutions": { "thin-rdb": { "thread_count": "1", }, "thin": { "thread_count": "1" } }
+        {"description": "1 thin vs 1 thin rdb streams",
+         "name_id": "1thin_vs_1thin_rdb",
+         "substitutions": { "thin-rdb": { "thread_count": "1", }, "thin": { "thread_count": "1" } }
+         },
+        {"description": "70 thin vs 70 thin rdb streams",
+         "name_id": "70thin_vs_70thin_rdb",
+         # "timeout_secs": 20, # Global timeout for this session job
+         "substitutions": { "thin-rdb": { "thread_count": "70", }, "thin": { "thread_count": "70" } }
+         }
+        ]
  }
-]}
 
 # Setup tcpdump
 
@@ -38,28 +36,11 @@
 {"host" : "root@rdbsender", "logfile" : "rdbsender_tcpdump.log", "type" : "ssh", "kill" : True }
 {"command" : "tcpdump -i eth1 -nn -w test.pcap" }
 
-{"host" : "root@rdbsender", "logfile" : "rdbsender_ttrace.log", "type" : "ssh", "kill" : True }
-{"command" : "/root/ttrace.sh" }
-
-
-# 'wait' here means that  this job must finish before we continue
-{"host" : "root@bridge2", "logfile" : "bridge2.log", "type" : "ssh", "wait": True, "print_output" : False }
-{"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
-{"command" : "tc qdisc del dev eth1 root" }
-{"command" : "tc qdisc add dev eth1 handle 1: root htb" }
-{"command" : "tc class add dev eth1 parent 1: classid 1:1 htb rate 1Mbps" }
-{"command" : "tc class add dev eth1 parent 1:1 classid 1:11 htb rate 1Mbps" }
-{"command" : "tc qdisc add dev eth1 parent 1:11 handle 10: netem delay 200ms 30ms 25% loss fixedv 7,15,16,17,30 40" }
-{"command" : "tc filter add dev eth1 protocol ip prio 1 u32 match ip dport 5000 0xffff flowid 1:11" }
-
 # Wait for tcpdump to start
 {"sleep" : "1" }
 
 {"host" : "root@zreceiver", "logfile" : "zreceiver.log", "type" : "ssh", "kill" : True  }
 {"command" : "/root/streamzero_srv -p 5000 -A" }
-
-{"host" : "root@zreceiver", "logfile" : "zreceiver2.log", "type" : "ssh", "kill" : True }
-{"command" : "/root/streamzero_srv -p 5001 -A" }
 
 # Wait for servers to start up
 {"sleep" : "1" }
@@ -68,15 +49,10 @@
 {"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0", "print_output" : False  }
 {"command" : "/root/streamzero_client -s 10.0.0.13 -p 5000 -P 15001 -z -x -r -d 4  -I d:3,i:30,S:10  -v2 -c %(thread_count)s", "substitute_id": "thin-rdb", "print_output" : True }
 
-{"host" : "root@rdbsender", "logfile" : "rdbsender2.log", "type" : "ssh", "print_output" : False, "color": "cyan" }
-{"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
-{"command" : "/root/streamzero_client -s 10.0.0.13 -p 5001 -P 16001 -z -x -d 10  -I d:2,i:80,S:100 -v2 -c %(thread_count)s", "substitute_id": "thin" }
-
 # Wait for jobs (threads) to finish
 {"wait" : ""}
 
 # Copy pcap files
 {"type" : "scp", "host" : "localhost", "remote_host" : "root@zreceiver", "filename": "test.pcap",  "target_filename": "zreceiver.pcap",   "logfile" : "zreceiver_scp.log",        "print_output" : False }
 {"type" : "scp", "host" : "localhost", "remote_host" : "root@rdbsender", "filename": "test.pcap",  "target_filename": "rdbsender.pcap",   "logfile" : "rdbsender_scp.log",        "print_output" : False }
-{"type" : "scp", "host" : "localhost", "remote_host" : "root@rdbsender", "filename": "ftrace.log", "target_filename": "rdbsender.ftrace", "logfile" : "rdbsender_scp_ftrace.log", "print_output" : False }
 
