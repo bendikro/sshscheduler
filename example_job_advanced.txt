@@ -9,7 +9,8 @@
 {"settings": "",
  "pcap_dir": "pcap", # Root dir of where to save pcap and log files
  "session_name": "rdbsender_to_zreceiver",
- "simulate": False # Simulate will not execute the commands
+ "simulate": False, # Simulate will not execute the commands
+ "default_user": "root"
  }
 
 {"delay_between_session_jobs_secs": 6,

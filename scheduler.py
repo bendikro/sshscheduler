@@ -29,6 +29,7 @@ This program runs a sequence of commands on remote hosts using SSH.
 
 import os, sys, time, re, argparse, thread, threading, traceback, select
 import pexpect
+from pxssh import pxssh
 import signal
 from datetime import datetime
 from threading import Thread
@@ -49,8 +50,8 @@ SSH_NEWKEY = '(?i)are you sure you want to continue connecting'
 
 lock_file = "%s/sshscheduler.lock" % os.getenv("HOME")
 
-settings = { "simulate": False }
-default_job_conf = { "color": None, "print_output": False, "command_timeout": None, "wait_on_commands": False }
+settings = { "simulate": False, "default_user": None }
+default_job_conf = { "color": None, "print_output": False, "command_timeout": None, "wait_on_commands": False, "user": None }
 default_command_conf = { "command_timeout": None }
 
 session_jobs = None
@@ -62,7 +63,10 @@ gather_results = True
 sigint_ctrl = False
 print_t = None
 print_commands = False
+print_command_output = None
 global_timeout_expired = 0
+
+
 
 class StdoutSplit:
     """Write string to both stdout and terminal log file"""
@@ -83,7 +87,7 @@ class StdoutSplit:
     def write(self, string):
         self.write_lock.acquire() # will block if lock is already held
         if self.line_prefix:
-            if (args.print_output is True or (self.print_to_stdout and args.print_output is None)):
+            if (print_command_output is True or (self.print_to_stdout and print_command_output is None)):
                 prefix = self.line_prefix
                 prefixed_string = ""
                 line_count = 0
@@ -93,6 +97,7 @@ class StdoutSplit:
                 if self.color and termcolor:
                     prefix = colored(prefix, self.color)
 
+                string = string.replace("\r", "")
                 for line in string.splitlines():
                     prefixed_string += prefix + line + "\n"
                     line_count += 1
@@ -101,7 +106,10 @@ class StdoutSplit:
         else:
             print(string, file=self.stdout, end="")
         if self.output_file:
-            print(string, file=self.output_file, end="")
+            try:
+                print(string, file=self.output_file, end="")
+            except ValueError, v:
+                print("write(%s) ValueError when printing: %s\n" % (self.get_thread_prefix(), str(string)), file=self.stdout, end="")
         self.write_lock.release()
 
     def flush(self, now=False):
@@ -132,6 +140,7 @@ class StdoutSplit:
         Thread safe function that prints the values prefixed with a timestamp and the
         ID of the calling thread. Output is written to stdout and terminal log file
         """
+        print
         self.print_lock.acquire() # will block if lock is already held
         arg = list(arg)
 
@@ -158,10 +167,14 @@ class StdoutSplit:
                     arg[0] = arg[0][:-1]
 
         if not (len(arg) == 1 and len(arg[0]) == 0):
+            # Print timestamp and thread name
             thread_prefix = self.get_thread_prefix()
+            if "prefix_color" in kwargs and termcolor:
+                thread_prefix = colored(thread_prefix, kwargs["prefix_color"])
+
             print(thread_prefix, end="")
 
-            # Ugly hack ;-)
+            # Print the strings
             while True:
                 if "color" in kwargs and termcolor:
                     if len(arg) > 1:
@@ -189,6 +202,11 @@ class StdoutSplit:
 sys.stdout = StdoutSplit(print_to_stdout=True)
 print_t = sys.stdout.print_t
 
+class scpJob(pxssh):
+    def __init__(self, logfile=None):
+        pxssh.__init__(self, logfile=logfile)
+        pxssh._spawn(self, "/bin/bash")
+        self.set_unique_prompt()
 
 class Job(Thread):
 
@@ -196,8 +214,8 @@ class Job(Thread):
         Thread.__init__(self)
         self.conf = host_conf
         self.host = host_conf["host"]
+        self.user = host_conf["user"]
         self.commands = commands
-        #self.timeout = 30 # Default timeout of 30 seconds
         self.timeout = 2
         self.killed = False
         self.session_job_conf = session_job_conf
@@ -218,7 +236,6 @@ class Job(Thread):
             try:
                 self.child.close(force=True)
                 self.child.kill(15)
-                #self.child.terminate(force=True)
             except KeyboardInterrupt:
                 print_t("kill(): Caught KeyboardInterrupt")
             except OSError, o:
@@ -234,32 +251,38 @@ class Job(Thread):
             self.logfile = StdoutSplit(self.fout, line_prefix="%s ::  " % line_prefix, color=self.conf["color"])
 
         if self.conf["type"] == "ssh":
-            self.child = self.ssh_login("root", self.host)
+            self.child = self.ssh_login(self.user, self.host)
             if not self.child:
                 if not settings["simulate"]:
                     print_t("Failed to connect to host %s" % self.host, color='red')
+                    abort_job(results=False, fatal=True)
                     return
-            self.execute_commands()
-            if not settings["simulate"]:
-                self.handle_commands_executed()
-            if print_commands:
-                print_t("Jobs on host %-14s has finished. Exiting host" % self.host, verbose=2)
         elif self.conf["type"] == "scp":
-            self.child = pexpect.spawn("/bin/bash", logfile=self.logfile)
-            self.child.timeout = 4
-            self.setup_shell(self.child)
-            self.execute_commands()
-            self.handle_commands_executed()
+            self.child = scpJob(logfile=self.logfile)
 
-    def read_command_output(self):
+        self.execute_commands()
+        if not settings["simulate"]:
+            self.handle_commands_executed()
+        if print_commands:
+            print_t("Jobs on %-9s have finished." % self.host, verbose=2)
+
+    def read_command_output(self, timeout=0):
+        ret = ""
         if not self.killed:
             while True:
                 try:
                     # Read the output to log. Necessary to get the output
-                    ret = self.child.read_nonblocking(size=1000, timeout=0)
-                except (pexpect.EOF, pexpect.TIMEOUT) as e:
+                    ret += self.child.read_nonblocking(size=1000, timeout=timeout)
+                    #print_t("read_command_output:", ret)
+                except pexpect.TIMEOUT, e:
+                    #print_t("read_command_output - TIMEOUT:", timeout)
+                    if timeout != 0:
+                        timeout = 0
+                        continue
+                    break
+                except pexpect.EOF, e:
                     # No more data
-                    #print_t("No more data:", e)
+                    #print_t("read_command_output - No more data:", e)
                     break
                 except select.error:
                     # (9, 'Bad file descriptor')
@@ -269,12 +292,10 @@ class Job(Thread):
                     if sys.stdout.verbose:
                         traceback.print_exc()
                     break
+        return ret
 
     def execute_commands(self):
-        #print_t("execute_commands:", self.commands)
         print_output = self.logfile.print_to_stdout
-
-#        self.child.setecho(False)
 
         for c in self.commands:
             self.logfile.print_to_stdout = print_output
@@ -287,13 +308,14 @@ class Job(Thread):
                     print_t("Encountered KeyError when inserting subsitution settings: %s" % k, color="red")
                     abort_job(results=False, fatal=True)
                     sys.exit(1)
+            # Execute commands in separate bash? Need if using pipes..
 #            command = "/bin/bash -c '%s'" % command
             self.last_command = command
 
             if print_commands:
-                print_t("Executing on %-14s: %s" % (self.host, command), color='yellow' if settings["simulate"] else None)
+                print_t("Command on %-9s: %s" % (self.host, command), color='yellow' if settings["simulate"] else None, prefix_color=self.conf["color"])
             if stopped:
-                print_t("Session job has been stopped before all commands were executed!", color='red')
+                print_t("Session job has been stopped before all commands were executed!", color='red', prefix_color=self.conf["color"])
                 return
             if settings["simulate"]:
                 continue
@@ -303,7 +325,7 @@ class Job(Thread):
 
             try:
                 # Clear out the output
-                self.read_command_output()
+                #self.read_command_output()
                 self.child.sendline(command)
             except OSError as o:
                 print_t("OSError: %s" % o, color="red")
@@ -315,49 +337,78 @@ class Job(Thread):
                     traceback.print_exc()
                 pass
 
-            if self.conf["wait_on_commands"] or True:
-                #print_t("========================= Expect EOF - timeout: %s, command: %s" % (str(self.child.timeout), command), color="red")
-                timeout = self.conf["command_timeout"]
-                if timeout is None:
-                    timeout = self.child.timeout
-                while True:
-                    try:
-                        index = self.child.expect([pexpect.EOF, PEXPECT_COMMAND_PROMPT, pexpect.TIMEOUT], timeout=timeout)
-                    except pexpect.ExceptionPexpect, e:
-                        # Reached an unexpected state in read_nonblocking()
-                        break
-                    except Exception, e:
-                        index = None
-                        print_t("Exception:: %s" % str(e), color="red")
-                    # Timeout
-                    if index == 2:
-                        # This means the default timeout has expanded. Since no timeout is specified in config, continue
-                        if self.conf["command_timeout"] is None:
-                            continue
-                        else:
-                            # Send SIGINT to stop command
-                            self.child.sendintr()
-                            print_t("Command stopped by timeout '%d', '%s'" % (timeout, command), verbose=1)
-                            break
-                    else:
-                        # Command finished and prompt was read
-                        break
+            timeout = self.conf["command_timeout"]
+            if timeout is None:
+                timeout = self.child.timeout
 
-            if self.conf["wait_on_commands"]:
-                #print_t("========================= Expect EOF ENDED: %s : %s" % (str(index), command), color="red")
-                #print_t("Exception:", self.child.after)
-                pass
+            return_value = self.wait_for_command_exit(timeout)
+            if return_value != 0 and not return_value is None:
+                print_t("Command on '%-9s' returned with status: %d: '%s'" % \
+                            (self.host, return_value, self.last_command), color='red')
+
+
+    def wait_for_command_exit(self, timeout):
+        def get_last_return_value():
+            try:
+                # Clear out the output
+                self.child.sendline("ret=$? && echo $ret && (exit $ret)")
+                self.child.prompt()
+                import os, re
+                m = re.match("ret=\$\? && echo \$ret && \(exit \$ret\).*(\d)", self.child.before, flags=re.DOTALL)
+                if m:
+                    return int(m.group(1))
+                else:
+                    print_t("Did not match return value regex: '%s'" % self.child.before)
+                    return None
+            except OSError as o:
+                print_t("OSError: %s" % o, color="red")
+                if sys.stdout.verbose:
+                    traceback.print_exc()
+        while True:
+            index = 0
+            try:
+                ret = self.child.prompt(timeout=30)
+                if ret is False:
+                    index = 2
+            except pexpect.ExceptionPexpect, e:
+                # Reached an unexpected state in read_nonblocking()
+                # End of File (EOF) in read_nonblocking(). Very pokey platform
+                #print_t("ExceptionPexpect:", e)
+                #print_t("ExceptionPexpect:")
+                break
+            except Exception, e:
+                index = None
+                print_t("Exception:: %s" % str(e), color="red")
+                traceback.print_exc()
+            # Timeout
+            if index == 2:
+                # This means the default timeout has expanded. Since no timeout is specified in config, continue
+                if self.conf["command_timeout"] is None:
+                    continue
+                else:
+                    # Send SIGINT to stop command
+                    self.child.sendintr()
+                    print_t("Command timeout!")
+                    print_t("Command stopped by timeout '%d', '%s'" % (timeout, command), verbose=1)
+                    break
+            else:
+                # Command finished and prompt was read
+                break
+        if not self.killed:
+            return get_last_return_value()
+        return None
 
     def handle_commands_executed(self):
         try:
             if not self.killed:
-                self.child.sendline("exit")
+                if self.conf["type"] == "ssh":
+                    self.child.logout()
+                else:
+                    self.child.sendline("exit")
         except OSError as o:
             print_t("handle_commands_executed() Caught OSError: %s" % o, color="red")
             if sys.stdout.verbose:
                 traceback.print_exc()
-
-        self.read_command_output()
 
         # Wait for process to exit
         try:
@@ -370,90 +421,50 @@ class Job(Thread):
             if self.child.exitstatus == 130:
                 # As expected
                 if should_be_killed:
-                    print_t("Command on '%-14s' was killed: '%s'" % (self.host, self.last_command), color='green', verbose=1)
+                    print_t("Command on '%-9s' was killed: '%s'" % (self.host, self.last_command), color='green', verbose=1)
                     pass
                 else:
                     if not self.killed:
-                        print_t("Command '%s' on '%s' was killed by CTRL-c (Status: %s)" % (self.last_command, self.host, str(self.child.exitstatus)), color='red')
+                        print_t("Command '%-9s' on '%s' was killed by CTRL-c (Status: %s)" %\
+                                    (self.last_command, self.host, str(self.child.exitstatus)), color='red')
                     else:
                         if sigint_ctrl:
-                            print_t("Command on '%-14s' was killed by the script. (Session aborted with CTRL-c by user) (Status: %d) : '%s'" % \
+                            print_t("Command on '%-9s' was killed by the script. (Session aborted with CTRL-c by user) (Status: %d) : '%s'" % \
                                         (self.host, self.child.exitstatus, self.last_command), color='green')
                         elif global_timeout_expired:
-                            print_t("Command on '%-14s' was killed by the script because the global timeout expired (%d). (Status: %d) : '%s'" % \
+                            print_t("Command on '%-9s' was killed by the script because the global timeout expired (%d). (Status: %d) : '%s'" % \
                                         (self.host, global_timeout_expired, self.child.exitstatus, self.last_command), color='green')
                         else:
-                            print_t("Command on '%-14s' was killed by the script, but that is not as expected. (Status: %d) : '%s' " % \
+                            print_t("Command on '%-9s' was killed by the script, but that is not as expected. (Status: %d) : '%s' " % \
                                         (self.host, self.child.exitstatus, self.last_command), color='red')
             else:
                 if global_timeout_expired:
-                    print_t("Command on '%-14s' exited with status: %s (Killed by session timeout %s) : '%s'" % (self.host, str(self.child.exitstatus), str(global_timeout_expired), self.last_command), color='red')
+                    print_t("Command on '%-9s' exited with status: %s (Killed by session timeout %s) : '%s'" %\
+                                (self.host, str(self.child.exitstatus), str(global_timeout_expired), self.last_command), color='red')
                 else:
-                    print_t("Command on '%-14s' exited with status: %s (Logfile: %s) : '%s'" % (self.host, str(self.child.exitstatus), self.logfile_name, self.last_command), color='red')
-                if should_be_killed:
-                    if not stopped:
-                        print_t("This command was not expected to exit. Aborting session!", color='red')
-                        abort_job(results=False, fatal=True)
-                else:
-                    if not self.killed:
-                        pass
+                    print_t("Command on '%-9s' exited with status: %s (Logfile: %s) : '%s'" %\
+                                (self.host, str(self.child.exitstatus), self.logfile_name, self.last_command), color='red')
+                    print_t("should_be_killed:", should_be_killed)
+                    print_t("stopped:", stopped)
+                    print_t("self.killed:", self.killed)
 
-    def setup_shell(self, child):
-        #
-        # Set command prompt to something more unique.
-        #
-        child.sendline("PS1='[PEXPECT]# '")
-        i = child.expect([pexpect.TIMEOUT, PEXPECT_COMMAND_PROMPT], timeout=10)
-        if i == 0:
-            print_t("# Couldn't set sh-style prompt -- trying csh-style.")
-            child.sendline("set prompt='[PEXPECT]# '")
-            i = child.expect([pexpect.TIMEOUT, PEXPECT_COMMAND_PROMPT], timeout=10)
-            if i == 0:
-                print_t("Failed to set command prompt using sh or csh style.", color='red')
-                print_t("Response was:", child.before)
-                sys.exit(1)
+                if not should_be_killed or not stopped:
+                    print_t("This command was not expected to exit. Aborting session: %s" % ("No" if sigint_ctrl else "Yes"), color='red')
+                    if not sigint_ctrl:
+                        abort_job(results=False, fatal=True)
 
     def ssh_login(self, user, host):
-        #
-        # Login via SSH
-        #
-        global DEFAULT_COMMAND_PROMPT, PEXPECT_COMMAND_PROMPT, TERMINAL_PROMPT, TERMINAL_TYPE, SSH_NEWKEY
-
-        import os, re
-        has_user = re.match(".+@.+", host)
-        if not has_user and user:
-            host = "%s@%s" % (os.getenv('USER'), host)
-
-        print_t("Connecting to host '%s'" % (host), verbose=2)
-
         if settings["simulate"]:
             return None
 
-        ssh = "ssh %s" % (host)
-        child = pexpect.spawn(ssh, timeout=5, searchwindowsize=1000, logfile=self.logfile)
-
-        i = child.expect([pexpect.TIMEOUT, SSH_NEWKEY, DEFAULT_COMMAND_PROMPT, '(?i)password'])
-
-        if i == 0: # Timeout
-            print_t("ERROR! on %s with timeout %s" % (host, str(child.timeout)), color="red")
-            print_t("Could not login with SSH. Here is what SSH said:", color='red')
-            print_t(child.before, child.after)
-            abort_job(results=False)
-            sys.exit(1)
-        if i == 1: # In this case SSH does not have the public key cached.
-            child.sendline('yes')
-            child.expect('(?i)password')
-        if i == 2:
-            # This may happen if a public key was setup to automatically login.
-            # But beware, the DEFAULT_COMMAND_PROMPT at this point is very trivial and
-            # could be fooled by some output in the MOTD or login message.
-            pass
-        if i == 3:
-            print_t("The machine is asking for a password. You should set up ssh keys to avoid this!")
-            sys.exit()
-
-        self.setup_shell(child)
-
+        child = pxssh(timeout=15, logfile=self.logfile)
+        try:
+            host, user = get_host_and_user(self.host, self.user)
+            print_t("Connecting to '%s@%s'" % (user, host), verbose=2)
+            child.login(host, user, None)
+        except Exception, e:
+            print_t("Failed to connect:", e)
+            return None
         # Success
         return child
 
@@ -505,7 +516,6 @@ def join_threads(threads, timeout=None):
         while True:
             try:
                 # Thread hasn't beens started yet
-                #if t.get_ident() is None:
                 if t.ident is None:
                     time.sleep(1)
                 else:
@@ -528,18 +538,6 @@ def join_threads(threads, timeout=None):
         if t.isAlive():
             print_t("THREAD IS STILL ALIVE:", t.name)
     return True
-
-def signal_handler(signal, frame):
-    global sigint_ctrl
-    print_t('Session interrupted by SIGNAL!')
-    sigint_ctrl = True
-    try:
-        abort_job()
-    except Exception, e:
-        print_t("signal_handler - Caught Excepytion: %s!" % str(e), color="red")
-    except:
-        print_t("signal_handler - Caught unspecified error!", color="red")
-        pass
 
 
 def handle_only_one_job_in_execution():
@@ -569,6 +567,7 @@ def setup_log_directories():
     except:
         pass
     return pcap_dir, log_dir, last_dir, last_log_dir
+
 
 def run_session_job(session_job_conf, jobs):
     global stopped, threads, threads_to_kill, sigint_ctrl
@@ -636,8 +635,8 @@ def run_session_job(session_job_conf, jobs):
             stopped = False
             for i in range(current_index + 1, len(jobs)):
                 job = jobs[i]
+                # We only want the scp jobs here
                 if not job[0]["type"] == "scp":
-                    #print_t("Invalid job: %s" % str(job[0]), color="red")
                     continue
 
                 # Prefix logfile name with session job name_id
@@ -654,7 +653,8 @@ def run_session_job(session_job_conf, jobs):
 
                 target_file = "%s/%s" % (pcap_dir, target_filename)
                 link_file = "%s/%s" % (last_dir, target_filename)
-                scp_cmd = "scp %s:%s %s" % (conf["remote_host"], conf["filename"], target_file)
+                host, user = get_host_and_user(conf["remote_host"], conf["user"])
+                scp_cmd = "scp %s@%s:%s %s" % (user, host, conf["filename"], target_file)
 
                 link_cmd = "ln %s %s" % (target_file, link_file)
                 commands = [{ "command": scp_cmd }, {"command": link_cmd}]
@@ -682,6 +682,14 @@ def run_session_job(session_job_conf, jobs):
     join_threads(threads_to_kill)
     threads_to_kill = []
 
+def get_host_and_user(host, user):
+    import os, re
+    m = re.match("(.+)@(.+)", host)
+    if m:
+        user = m.group(1)
+        host = m.group(2)
+    return host, user
+
 def parse_job_conf(filename):
     global settings
     global session_jobs
@@ -706,10 +714,20 @@ def parse_job_conf(filename):
         else:
             eval_lines = ""
 
+        # The settings dict
+        if d.has_key("settings"):
+            settings.update(d)
+            if not "session_name" in settings:
+                settings["session_name"] = os.path.splitext(filename)[0]
+            if settings["default_user"] is None:
+                settings["default_user"] = os.getenv('USER')
         # New host
-        if d.has_key("host"):
+        elif d.has_key("host"):
             job_conf = default_job_conf.copy()
             job_conf.update(d)
+            if job_conf["user"] is None:
+                job_conf["user"] = settings["default_user"]
+
             if job is not None:
                 jobs.append(job)
             job = [job_conf, []]
@@ -729,10 +747,7 @@ def parse_job_conf(filename):
             d["type"] = None
             jobs.append([d])
             job = None
-        elif d.has_key("settings"):
-            settings.update(d)
-            if not "session_name" in settings:
-                settings["session_name"] = os.path.splitext(filename)[0]
+
         elif d.has_key("session_jobs"):
             session_jobs = d
             for sj in d["session_jobs"]:
@@ -772,8 +787,38 @@ def to_bool(value):
     print('Invalid value for boolean conversion: ' + str(value))
     sys.exit(0)
 
+class SignalHandler(Thread):
+
+    active_handlers = []
+
+    def __init__(self, call_count=0):
+        self.call_count = call_count
+
+    def handle_signal(self, signal, frame):
+        self.call_count += 1
+        handler = SignalHandler(self.call_count)
+        Thread.__init__(handler)
+        SignalHandler.active_handlers.append(handler)
+        handler.start()
+
+    def run(self):
+        global sigint_ctrl
+        print_t("Session interrupted by SIGINT signal. Killing threads...", color="red")
+        sigint_ctrl = True
+        try:
+            abort_job()
+        except Exception, e:
+            print_t("signal_handler - Caught Excepytion: %s!" % str(e), color="red")
+        except:
+            print_t("signal_handler - Caught unspecified error!", color="red")
+            pass
+        for i, h in enumerate(SignalHandler.active_handlers):
+            if self is h:
+                del SignalHandler.active_handlers[i]
+
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, signal_handler)
+    signal_handler = SignalHandler()
+    signal.signal(signal.SIGINT, signal_handler.handle_signal)
 
     argparser = argparse.ArgumentParser(description="Run test sessions")
     argparser.add_argument("-v", "--verbose",  help="Enable verbose output.", action='count', default=0, required=False)
@@ -786,7 +831,7 @@ if __name__ == "__main__":
     sys.stdout.verbose = args.verbose
 
     if args.print_output:
-        args.print_output = to_bool(args.print_output)
+        print_command_output = to_bool(args.print_output)
 
     jobs = parse_job_conf(args.file)
 
@@ -850,3 +895,4 @@ if __name__ == "__main__":
 
     sys.stdout.close()
     os.remove(lock_file)
+
