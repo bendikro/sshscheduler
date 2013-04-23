@@ -218,7 +218,7 @@ class Job(Thread):
         self.host = host_conf["host"]
         self.user = host_conf["user"]
         self.commands = commands
-        self.timeout = 2
+        #self.timeout = 2
         self.killed = False
         self.command_timed_out = False
         self.session_job_conf = session_job_conf
@@ -226,6 +226,7 @@ class Job(Thread):
         self.logfile_name = None
         self.fout = None
         self.last_command = None
+        self.login_sucessfull = False
         if self.conf.has_key("logfile_name"):
             self.logfile_name = self.conf["logfile_name"]
             if self.session_job_conf and self.session_job_conf["name_id"]:
@@ -256,9 +257,10 @@ class Job(Thread):
 
         if self.conf["type"] == "ssh":
             self.child = self.ssh_login(self.user, self.host)
-            if not self.child:
+            if not self.login_sucessfull:
                 if not settings["simulate"]:
                     print_t("Failed to connect to host %s" % self.host, color='red')
+                    print_t("child.timeout: %s" % self.child.timeout, color='red')
                     abort_job(results=False, fatal=True)
                     return
         elif self.conf["type"] == "scp":
@@ -451,13 +453,24 @@ class Job(Thread):
             return None
 
         child = pxssh(timeout=30, logfile=self.logfile)
-        try:
-            host, user = get_host_and_user(self.host, self.user)
-            print_t("Connecting to '%s@%s'" % (user, host), verbose=2)
-            child.login(host, user, None)
-        except Exception, e:
-            print_t("Failed to connect:", e)
-            return None
+        count = 0
+        while True:
+            try:
+                host, user = get_host_and_user(self.host, self.user)
+                print_t("Connecting to '%s@%s'" % (user, host), verbose=2)
+                count += 1
+                child.login(host, user, None)
+                self.login_sucessfull = True
+                break
+            except pexpect.TIMEOUT, e:
+                if count >= 3:
+                    print_t("Failed to connect after %d attempts: %s" % (count, str(e)), color="red")
+                    return child
+                print_t("Failed to connect to '%s'. Tries left: %d" % (self.host, 3 - count), color="yellow")
+                child.pid = None
+            except Exception, e:
+                print_t("Failed to connect:", e)
+                return child
         # Success
         return child
 
