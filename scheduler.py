@@ -33,6 +33,7 @@ from pxssh import pxssh
 import signal
 from datetime import datetime
 from threading import Thread
+import copy
 
 try:
     from termcolor import colored, cprint
@@ -51,8 +52,8 @@ SSH_NEWKEY = '(?i)are you sure you want to continue connecting'
 lock_file = "%s/sshscheduler.lock" % os.getenv("HOME")
 
 settings = { "simulate": False, "default_user": None }
-default_job_conf = { "color": None, "print_output": False, "command_timeout": None, "wait_on_commands": False, "user": None }
-default_command_conf = { "command_timeout": None }
+default_job_conf = { "color": None, "print_output": False, "command_timeout": None, "user": None, "return_values": {"pass": [0], "fail": [] } }
+default_command_conf = { "command_timeout": None, "return_values": {"pass": [], "fail": [] } }
 default_session_conf = { "name_id": None, }
 
 session_jobs = None
@@ -219,6 +220,7 @@ class Job(Thread):
         self.commands = commands
         self.timeout = 2
         self.killed = False
+        self.command_timed_out = False
         self.session_job_conf = session_job_conf
         self.logfile = None
         self.logfile_name = None
@@ -235,8 +237,9 @@ class Job(Thread):
             self.killed = True
             # Necessary to shut down server process that's still running
             try:
-                self.child.close(force=True)
-                self.child.kill(15)
+                #self.child.close(force=True)
+                #self.child.kill(15)
+                self.child.terminate(force=True)
             except KeyboardInterrupt:
                 print_t("kill(): Caught KeyboardInterrupt")
             except OSError, o:
@@ -299,6 +302,7 @@ class Job(Thread):
         print_output = self.logfile.print_to_stdout
 
         for c in self.commands:
+            self.command_timed_out = False
             self.logfile.print_to_stdout = print_output
             command = c["command"]
             if self.session_job_conf and c.has_key("substitute_id"):
@@ -311,10 +315,10 @@ class Job(Thread):
                     sys.exit(1)
             # Execute commands in separate bash? Need if using pipes..
             command = "/bin/bash -c '%s'" % command
-            self.last_command = command
 
             if print_commands:
-                print_t("Command on %-9s: %s" % (self.host, command), color='yellow' if settings["simulate"] else None, prefix_color=self.conf["color"])
+                print_t("Command on %-9s: \"%s\"%s" % (self.host, command, " with timeout: %s sec" % c["command_timeout"] if c["command_timeout"] else "" ),
+                        color='yellow' if settings["simulate"] else None, prefix_color=self.conf["color"])
             if stopped:
                 print_t("Session job has been stopped before all commands were executed!", color='red', prefix_color=self.conf["color"])
                 return
@@ -324,6 +328,7 @@ class Job(Thread):
             if "print_output" in c:
                 self.logfile.print_to_stdout = c["print_output"]
 
+            self.last_command = command
             try:
                 # Clear out the output
                 #self.read_command_output()
@@ -338,17 +343,20 @@ class Job(Thread):
                     traceback.print_exc()
                 pass
 
-            timeout = self.conf["command_timeout"]
+            timeout = c["command_timeout"]
             if timeout is None:
                 timeout = self.child.timeout
 
-            return_value = self.wait_for_command_exit(timeout)
-            if return_value != 0 and not return_value is None:
-                print_t("Command on '%-9s' returned with status: %d: '%s'" % \
-                            (self.host, return_value, self.last_command), color='red')
+            return_value = self.wait_for_command_exit(c, timeout)
 
+            if not self.killed and not self.command_timed_out:
+                if (c["return_values"]["pass"] and not return_value in c["return_values"]["pass"]) or (c["return_values"]["fail"] and return_value in c["return_values"]["fail"]):
+                    print_t("Command on '%-9s' returned with status: %s: '%s', passing return values: %s, failing return values: %s" % \
+                                (self.host, str(return_value), self.last_command, str(c["return_values"]["pass"]), str(c["return_values"]["fail"])), color='red')
+                    print_t("Aborting session!", color="red")
+                    abort_job(results=False, fatal=True)
 
-    def wait_for_command_exit(self, timeout):
+    def wait_for_command_exit(self, command, timeout):
         def get_last_return_value():
             try:
                 # Clear out the output
@@ -359,7 +367,7 @@ class Job(Thread):
                 if m:
                     return int(m.group(1))
                 else:
-                    print_t("Did not match return value regex: '%s'" % self.child.before)
+                    print_t("Did not match return value regex: '%s', bug?!" % self.child.before, color="red")
                     return None
             except OSError as o:
                 print_t("OSError: %s" % o, color="red")
@@ -368,7 +376,7 @@ class Job(Thread):
         while True:
             index = 0
             try:
-                ret = self.child.prompt(timeout=30)
+                ret = self.child.prompt(timeout=timeout)
                 if ret is False:
                     index = 2
             except pexpect.ExceptionPexpect, e:
@@ -384,23 +392,24 @@ class Job(Thread):
             # Timeout
             if index == 2:
                 # This means the default timeout has expanded. Since no timeout is specified in config, continue
-                if self.conf["command_timeout"] is None:
+                if command["command_timeout"] is None:
                     continue
                 else:
                     # Send SIGINT to stop command
                     self.child.sendintr()
-                    print_t("Command timeout!")
-                    print_t("Command stopped by timeout '%d', '%s'" % (timeout, command), verbose=1)
-                    break
+                    self.command_timed_out = True
+                    print_t("Command stopped by timeout '%d', '%s'" % (timeout, self.last_command), color="yellow", verbose=1)
+                    # Continue to expect next prompt
             else:
                 # Command finished and prompt was read
                 break
-        if not self.killed:
+        if not self.killed and not self.command_timed_out:
             return get_last_return_value()
         return None
 
     def handle_commands_executed(self):
         try:
+            #print_t("handle_commands_executed killed:", self.killed)
             if not self.killed:
                 if self.conf["type"] == "ssh":
                     self.child.logout()
@@ -417,48 +426,31 @@ class Job(Thread):
         except pexpect.ExceptionPexpect:
             pass
 
-        if self.child.exitstatus != 0:
-            should_be_killed = self.conf.has_key("kill") and self.conf["kill"]
-            if self.child.exitstatus == 130:
-                # As expected
-                if should_be_killed:
-                    print_t("Command on '%-9s' was killed: '%s'" % (self.host, self.last_command), color='green', verbose=1)
-                    pass
-                else:
-                    if not self.killed:
-                        print_t("Command '%-9s' on '%s' was killed by CTRL-c (Status: %s)" %\
-                                    (self.last_command, self.host, str(self.child.exitstatus)), color='red')
-                    else:
-                        if sigint_ctrl:
-                            print_t("Command on '%-9s' was killed by the script. (Session aborted with CTRL-c by user) (Status: %d) : '%s'" % \
-                                        (self.host, self.child.exitstatus, self.last_command), color='green')
-                        elif global_timeout_expired:
-                            print_t("Command on '%-9s' was killed by the script because the global timeout expired (%d). (Status: %d) : '%s'" % \
-                                        (self.host, global_timeout_expired, self.child.exitstatus, self.last_command), color='green')
-                        else:
-                            print_t("Command on '%-9s' was killed by the script, but that is not as expected. (Status: %d) : '%s' " % \
-                                        (self.host, self.child.exitstatus, self.last_command), color='red')
-            else:
-                if global_timeout_expired:
-                    print_t("Command on '%-9s' exited with status: %s (Killed by session timeout %s) : '%s'" %\
-                                (self.host, str(self.child.exitstatus), str(global_timeout_expired), self.last_command), color='red')
-                else:
-                    print_t("Command on '%-9s' exited with status: %s (Logfile: %s) : '%s'" %\
-                                (self.host, str(self.child.exitstatus), self.logfile_name, self.last_command), color='red')
-                    print_t("should_be_killed:", should_be_killed)
-                    print_t("stopped:", stopped)
-                    print_t("self.killed:", self.killed)
+        # The job was killed by the script
+        if self.killed:
+            if self.child.exitstatus != 130:
+                print_t("Command aborted but exitstatus is not 130: '%s' !?" % (str(self.child.exitstatus)), color="red")
 
-                if not should_be_killed or not stopped:
-                    print_t("This command was not expected to exit. Aborting session: %s" % ("No" if sigint_ctrl else "Yes"), color='red')
-                    if not sigint_ctrl:
-                        abort_job(results=False, fatal=True)
+            should_be_killed = self.conf.has_key("kill") and self.conf["kill"]
+            if not should_be_killed:
+                if sigint_ctrl:
+                    print_t("Command on '%-9s' was killed by the script. (Session aborted with CTRL-c by user) (Status: %s) : '%s'" % \
+                                (self.host, str(self.child.exitstatus), self.last_command), color='yellow')
+                elif global_timeout_expired:
+                    print_t("Command on '%-9s' was killed by the script because the global timeout expired (%d). (Status: %s) : '%s'" % \
+                                (self.host, global_timeout_expired, str(self.child.exitstatus), self.last_command), color='yellow')
+                else:
+                    print_t("Command on '%-9s' was killed by the script, but that is not as expected. (Status: %s) : '%s' " % \
+                                (self.host, str(self.child.exitstatus), self.last_command), color='red')
+            else:
+                print_t("Command on '%-9s' was killed by the script. (Status: %s) : '%s'" % \
+                            (self.host, str(self.child.exitstatus), self.last_command), color='yellow', verbose=1)
 
     def ssh_login(self, user, host):
         if settings["simulate"]:
             return None
 
-        child = pxssh(timeout=15, logfile=self.logfile)
+        child = pxssh(timeout=30, logfile=self.logfile)
         try:
             host, user = get_host_and_user(self.host, self.user)
             print_t("Connecting to '%s@%s'" % (user, host), verbose=2)
@@ -575,8 +567,12 @@ def run_session_job(session_job_conf, jobs):
     session_job_start_time = datetime.now()
 
     if session_job_conf:
-        print_t("Running session job '%s' (%s) (Timeout: %s) at %s %s" % (session_job_conf["name_id"], session_job_conf["description"], session_job_conf["timeout_secs"], str(session_job_start_time),
-                                                            "in test mode" if settings["simulate"] else ""), color='yellow' if settings["simulate"] else None)
+        print_t("Running session job '%s' (%s) (Timeout: %s) at %s %s" % (session_job_conf["name_id"],
+                                                                          session_job_conf["description"],
+                                                                          session_job_conf["timeout_secs"],
+                                                                          str(session_job_start_time),
+                                                                          "in test mode" if settings["simulate"] else ""),
+                color='yellow' if settings["simulate"] else 'green')
     current_index = 0
     for i in range(len(jobs)):
         if stopped:
@@ -622,9 +618,11 @@ def run_session_job(session_job_conf, jobs):
                 # Sleep to let remaining packets arrive before killing tcpdump
                 time.sleep(1)
                 stopped = True
-                kill_threads(threads_to_kill)
+                if not (global_timeout_expired or sigint_ctrl):
+                    kill_threads(threads_to_kill)
                 break
             else:
+                # Shouldn't reach this code any longer
                 print_t("Test interrupted by CTRL-c!", color='red')
                 sigint_ctrl = True
                 abort_job()
@@ -664,9 +662,15 @@ def run_session_job(session_job_conf, jobs):
                 host, user = get_host_and_user(conf["remote_host"], conf["user"])
                 scp_cmd = "scp %s@%s:%s %s" % (user, host, conf["filename"], target_file)
 
-                link_cmd = "ln %s %s" % (target_file, link_file)
-                commands = [{ "command": scp_cmd }, {"command": link_cmd}]
+                ln_cmd = "ln %s %s" % (target_file, link_file)
 
+                cmd_scp_dict = copy.deepcopy(default_command_conf)
+                cmd_ln_dict = copy.deepcopy(default_command_conf)
+                cmd_scp_dict["command"] = scp_cmd
+                cmd_ln_dict["command"] = ln_cmd
+                cmd_scp_dict["return_values"].update(conf["return_values"])
+                cmd_ln_dict["return_values"].update(conf["return_values"])
+                commands = [cmd_scp_dict, cmd_ln_dict]
                 t = Job(job[0], session_job_conf, commands)
                 threads.append(t)
                 t.start()
@@ -731,23 +735,29 @@ def parse_job_conf(filename):
                 settings["default_user"] = os.getenv('USER')
         # New host
         elif d.has_key("host"):
-            job_conf = default_job_conf.copy()
+            job_conf = copy.deepcopy(default_job_conf)
             job_conf.update(d)
             if job_conf["user"] is None:
                 job_conf["user"] = settings["default_user"]
-
             if job is not None:
                 jobs.append(job)
             job = [job_conf, []]
         # Command for host
         elif d.has_key("command"):
-            cmd_conf = default_command_conf.copy()
+            cmd_conf = copy.deepcopy(default_command_conf)
             cmd_conf.update(d)
             if not "print_output" in d:
                 cmd_conf["print_output"] = job[0]["print_output"]
+            if "return_values" in d:
+                cmd_conf["return_values"] = default_command_conf["return_values"].copy()
+                cmd_conf["return_values"].update(d["return_values"])
+            else:
+                cmd_conf["return_values"] = job[0]["return_values"].copy()
+
+            if not "command_timeout" in d:
+                cmd_conf["command_timeout"] = job[0]["command_timeout"]
+
             job[1].append(cmd_conf)
-            if cmd_conf["print_output"] or cmd_conf["command_timeout"]:
-                job[0]["wait_on_commands"] = True
         # Do a sleep or wait for all previous jobs
         elif d.has_key("sleep") or d.has_key("wait") or d.has_key("cleanup"):
             if job is not None:
@@ -768,7 +778,7 @@ def parse_job_conf(filename):
                     if "default_settings" in d:
                         # Exists on both default settings and sub
                         if sub in d["default_settings"]:
-                            sub_settings = d["default_settings"][sub].copy()
+                            sub_settings = copy.deepcopy(d["default_settings"][sub])
                             sub_settings.update(sj["substitutions"][sub])
                             sj["substitutions"][sub] = sub_settings
 
@@ -866,7 +876,9 @@ if __name__ == "__main__":
     out = os.popen(cmd).read()
 
     session_start_time = datetime.now()
-    print_t("Starting session '%s' at %s %s" % (settings["session_name"], str(session_start_time), "in test mode" if settings["simulate"] else ""), color='yellow' if settings["simulate"] else None)
+    print_t("Starting session '%s' at %s %s" % (settings["session_name"], str(session_start_time),
+                                                "in test mode" if settings["simulate"] else ""),
+            color='yellow' if settings["simulate"] else 'green')
 
     # session_jobs defined in config
     if session_jobs:
