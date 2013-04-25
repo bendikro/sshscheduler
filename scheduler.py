@@ -42,8 +42,9 @@ except:
     print("termcolor could not be found. To enable colors in terminal output, install termcolor.")
     termcolor = False
 
-settings = { "simulate": False, "default_user": None }
-default_job_conf = { "color": None, "print_output": False, "command_timeout": None, "user": None, "return_values": {"pass": [0], "fail": [] } }
+settings = { "session_name": "sshscheduler_example_session", "default_user": None, "results_dir": "results", "simulate": False }
+default_session_jobs_conf = {"session_jobs": None, "default_session_job_timeout_secs": None, "delay_between_session_jobs_secs": 0, "default_settings": None}
+default_job_conf = { "type": None, "color": None, "print_output": False, "command_timeout": None, "user": None, "return_values": {"pass": [0], "fail": [] } }
 default_command_conf = { "command_timeout": None, "return_values": {"pass": [], "fail": [] } }
 default_session_conf = { "name_id": None, }
 default_wait_sleep_conf = { "sleep": 0, "type": None }
@@ -109,7 +110,9 @@ class StdoutSplit:
             try:
                 print(string, file=self.output_file, end="")
             except ValueError, v:
-                print("write(%s) ValueError (%s) when printing: '%s'\n" % (self.get_thread_prefix(), str(v), str(string)), file=self.stdout, end="")
+                print("write(%s) ValueError (%s) when printing: '%s'" % (self.get_thread_prefix(), str(v), str(string)), file=self.stdout)
+                print("STACK:", file=self.stdout)
+                traceback.print_stack()
         self.write_lock.release()
 
     def flush(self, now=False):
@@ -129,8 +132,7 @@ class StdoutSplit:
             self.output_file.close()
 
     def get_thread_prefix(self, verbose=None):
-        import datetime
-        t = datetime.datetime.now()
+        t = datetime.now()
         t = "%s:%03d" % (t.strftime("%H:%M:%S"), t.microsecond/1000)
         name = threading.current_thread().name
         if verbose:
@@ -255,9 +257,7 @@ class Job(Thread):
         if hasattr(self, 'child') and self.child is not None:
             # Necessary to shut down server process that's still running
             try:
-                #self.child.close(force=True)
-                #self.child.kill(15)
-                self.child.terminate(force=True)
+                self.child.close(force=True)
             except KeyboardInterrupt:
                 print_t("kill(): Caught KeyboardInterrupt")
             except OSError, o:
@@ -314,7 +314,7 @@ class Job(Thread):
                     pass
                 except OSError as o:
                     print_t("OSError:", e, verbose=1)
-                    if sys.stdout.verbose:
+                    if sys.stdout.print_exceptions:
                         traceback.print_exc()
                     break
         return ret
@@ -326,8 +326,9 @@ class Job(Thread):
             self.command_timed_out = False
             self.logfile.print_to_stdout = print_output
             command = c["command"]
+
             if self.session_job_conf and c.has_key("substitute_id"):
-                #print_t("Substituting into '%s' : '%s'" % (command, self.session_job_conf["substitutions"][c["substitute_id"]]))
+                print_t("Substituting into '%s' : '%s'" % (command, self.session_job_conf["substitutions"][c["substitute_id"]]), verbose=3)
                 try:
                     command = command % self.session_job_conf["substitutions"][c["substitute_id"]]
                 except KeyError, k:
@@ -361,13 +362,12 @@ class Job(Thread):
                 self.child.sendline(command)
             except OSError as o:
                 print_t("OSError: %s" % o, color="red")
-                if sys.stdout.verbose:
+                if sys.stdout.print_exceptions:
                     traceback.print_exc()
             except Exception, e:
                 print_t("Exception: %s" % str(e), color="red")
-                if sys.stdout.verbose:
+                if sys.stdout.print_exceptions:
                     traceback.print_exc()
-                pass
 
             timeout = c["command_timeout"]
             if timeout is None:
@@ -388,7 +388,6 @@ class Job(Thread):
                 # Clear out the output
                 self.child.sendline("ret=$? && echo $ret && (exit $ret)")
                 self.child.prompt()
-                import os, re
                 m = re.match("ret=\$\? && echo \$ret && \(exit \$ret\).*(\d)", self.child.before, flags=re.DOTALL)
                 if m:
                     return int(m.group(1))
@@ -397,7 +396,11 @@ class Job(Thread):
                     return None
             except OSError as o:
                 print_t("OSError: %s" % o, color="red")
-                if sys.stdout.verbose:
+                if sys.stdout.print_exceptions:
+                    traceback.print_exc()
+            except pexpect.EOF, e:
+                print_t("pexpect.EOF in get_last_return_value()", color="red")
+                if sys.stdout.print_exceptions:
                     traceback.print_exc()
         while True:
             index = 0
@@ -408,9 +411,13 @@ class Job(Thread):
             except pexpect.ExceptionPexpect, e:
                 # Reached an unexpected state in read_nonblocking()
                 # End of File (EOF) in read_nonblocking(). Very pokey platform
-                #print_t("ExceptionPexpect:", e)
-                #print_t("ExceptionPexpect:")
+                if sys.stdout.print_exceptions:
+                    traceback.print_exc()
                 break
+            except pexpect.EOF, e:
+                print_t("pexpect.EOF:", color="red")
+                if sys.stdout.print_exceptions:
+                    traceback.print_exc()
             except Exception, e:
                 index = None
                 print_t("Exception:: %s" % str(e), color="red")
@@ -592,7 +599,7 @@ def setup_log_directories():
 
 
 def run_session_job(session_job_conf, jobs):
-    global stopped, threads, threads_to_kill, sigint_ctrl
+    global stopped, threads, threads_to_kill, sigint_ctrl, gather_results
     session_job_start_time = datetime.now()
 
     if session_job_conf:
@@ -725,7 +732,6 @@ def run_session_job(session_job_conf, jobs):
     threads_to_kill = []
 
 def get_host_and_user(host, user):
-    import os, re
     m = re.match("(.+)@(.+)", host)
     if m:
         user = m.group(1)
@@ -775,6 +781,10 @@ def parse_job_conf(filename):
             job_conf.update(d)
             if job_conf["user"] is None:
                 job_conf["user"] = settings["default_user"]
+            if "ssh" in job_conf:
+                job_conf["type"] = "ssh"
+            elif "scp" in job_conf:
+                job_conf["type"] = "ssh"
             if job is not None:
                 jobs.append(job)
             job = [job_conf, []]
@@ -803,25 +813,26 @@ def parse_job_conf(filename):
             jobs.append([conf])
             job = None
         elif d.has_key("session_jobs"):
-            session_jobs = d
-            for sj in d["session_jobs"]:
+            session_jobs = default_session_jobs_conf
+            session_jobs.update(d)
+            for sj in session_jobs["session_jobs"]:
                 if not "timeout_secs" in sj:
-                    sj["timeout_secs"] = d["default_session_job_timeout_secs"]
+                    sj["timeout_secs"] = session_jobs["default_session_job_timeout_secs"]
                 if not "substitutions" in sj:
                     continue
                 for sub in sj["substitutions"].keys():
                     # If it refers to default settings, add these to the settings dict
-                    if "default_settings" in d:
+                    if session_jobs["default_settings"]:
                         # Exists on both default settings and sub
-                        if sub in d["default_settings"]:
-                            sub_settings = copy.deepcopy(d["default_settings"][sub])
+                        if sub in session_jobs["default_settings"]:
+                            sub_settings = copy.deepcopy(session_jobs["default_settings"][sub])
                             sub_settings.update(sj["substitutions"][sub])
                             sj["substitutions"][sub] = sub_settings
 
-                        diff = set(d["default_settings"].keys()) - set(sj["substitutions"].keys())
+                        diff = set(session_jobs["default_settings"].keys()) - set(sj["substitutions"].keys())
                         for key in diff:
                             # Only in default settings, so add to sub
-                            sj["substitutions"][key] = d["default_settings"][key]
+                            sj["substitutions"][key] = session_jobs["default_settings"][key]
     if eval_lines:
         print_t("You have a syntax error in the job config!", color="red")
         print_t("Failed to parse config lines: %s" % eval_lines, color="red")
@@ -871,6 +882,10 @@ class SignalHandler(Thread):
         for i, h in enumerate(SignalHandler.active_handlers):
             if self is h:
                 del SignalHandler.active_handlers[i]
+
+        print_t("LockFileHandler running:", lockFileHandler.running, verbose=1)
+        print_t("Threads         (%d): %s" % (len(threads), str(threads)), verbose=1)
+        print_t("Threads to kill (%d): %s" % (len(threads_to_kill), str(threads_to_kill)), verbose=1)
         print_t("SignalHandler run finished.", verbose=3)
 
 class LockFileHandler(Thread):
@@ -942,7 +957,7 @@ def write_info_file(args, results_dir):
     if args.comment:
         filename = "info_%s.nfo" % args.comment.replace(" ", "_")
     filepath = os.path.join(results_dir, filename)
-    print_t("Writing INFO FILE:", filepath)
+    print_t("Writing INFO FILE: %s" % filepath, verbose=1)
     f = open(filepath, "w")
     f.write("session start time: %s\n" % str(session_start_time))
     f.write("session end time: %s\n" % str(session_end_time))
@@ -957,6 +972,7 @@ def main():
 
     argparser = argparse.ArgumentParser(description="Run test sessions")
     argparser.add_argument("-v", "--verbose",  help="Enable verbose output. Can be applied multiple times", action='count', default=0, required=False)
+    argparser.add_argument("-x", "--exceptions",  help="Print full exception traces", action='store_true', required=False, default=False)
     argparser.add_argument("-s", "--simulate",  help="Simulate only, do not execute commands.", action='store_true', required=False)
     argparser.add_argument("-c", "--print-commands",  help="Print the commands being executed.", action='store_true', required=False)
     argparser.add_argument("-p", "--print-output", metavar='boolean string', help="Print the terminal output from all the commands to stdout."\
@@ -967,6 +983,7 @@ def main():
     args = argparser.parse_args()
 
     sys.stdout.verbose = args.verbose
+    sys.stdout.print_exceptions = args.exceptions
 
     if args.print_output:
         print_command_output = to_bool(args.print_output)

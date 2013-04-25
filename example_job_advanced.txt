@@ -59,7 +59,7 @@
 # 'wait' here means that this job must finish before we continue
 {"host" : "root@bridge2", "logfile" : "bridge2.log", "type" : "ssh", "wait": True }
 {"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
-{"command" : "tc qdisc del dev eth1 root", "return_values": {"pass":[0,2]} } } # If no root device exists, exit value 2 should also pass
+{"command" : "tc qdisc del dev eth1 root", "return_values": {"pass":[0,2]} } # If no root device exists, exit value 2 should also pass
 {"command" : "tc qdisc add dev eth1 handle 1: root htb" }
 {"command" : "tc class add dev eth1 parent 1: classid 1:1 htb rate 1Mbps" }
 {"command" : "tc class add dev eth1 parent 1:1 classid 1:11 htb rate 1Mbps" }

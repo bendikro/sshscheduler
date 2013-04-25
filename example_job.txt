@@ -7,7 +7,7 @@
 # Send from rdbsender to zreceiver
 
 {"settings": "",
- "pcap_dir": "pcap", # Root dir of where to save pcap and log files
+ "results_dir": "pcap", # Root dir of where to save pcap and log files
  "session_name": "rdbsender_to_zreceiver",
  "simulate": False, # Simulate will not execute the commands
  "default_user": "root"
