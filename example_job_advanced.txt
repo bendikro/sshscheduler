@@ -59,7 +59,7 @@
 # 'wait' here means that this job must finish before we continue
 {"host" : "root@bridge2", "logfile" : "bridge2.log", "type" : "ssh", "wait": True }
 {"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
-{"command" : "tc qdisc del dev eth1 root" }
+{"command" : "tc qdisc del dev eth1 root", "return_values": {"pass":[0,2]} } } # If no root device exists, exit value 2 should also pass
 {"command" : "tc qdisc add dev eth1 handle 1: root htb" }
 {"command" : "tc class add dev eth1 parent 1: classid 1:1 htb rate 1Mbps" }
 {"command" : "tc class add dev eth1 parent 1:1 classid 1:11 htb rate 1Mbps" }
@@ -96,8 +96,8 @@
 {"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
 {"command" : "/root/streamzero_client -s 10.0.0.13 -p 5001 -P 16001 -v2 -z -x %(stream_duration)s %(stream)s %(stream_count)s %(options)s", "substitute_id": "thin", "print_output" : False }
 
-# Wait for jobs (threads) to finish
-{"wait" : ""}
+# Wait for jobs (threads) to finish. When processes has finished, sleep 5 seconds before continuing
+{"wait" : "", "sleep": "5"}
 
 # Copy pcap files
 {"type" : "scp", "host" : "localhost", "remote_host" : "root@zreceiver", "filename": "test.pcap",  "target_filename": "zreceiver.pcap",   "logfile" : "zreceiver_scp.log",       }
