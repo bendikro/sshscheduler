@@ -1049,6 +1049,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except SystemExit:
+        pass
     except:
         print_t("Exception in main:")
         traceback.print_exc()
