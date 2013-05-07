@@ -647,7 +647,7 @@ def run_session_job(session_job_conf, jobs):
                 print_t("Jobs completed uninterupted. Killing threads: %d" % len(threads_to_kill), color='green')
                 # Sleep the number of seconds given in conf
                 if job[0]["sleep"]:
-                    time.sleep(job[0]["sleep"])
+                    time.sleep(float(job[0]["sleep"]))
                 stopped = True
                 if not (global_timeout_expired or sigint_ctrl):
                     kill_threads(threads_to_kill)
