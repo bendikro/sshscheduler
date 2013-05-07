@@ -179,7 +179,7 @@
 <col class="field-body" />
 <tbody valign="top">
 <tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
-<li><strong>sleep</strong> (<em>int</em>) &#8211; The number of seconds to sleep before continuing</li>
+<li><strong>sleep</strong> (<em>int/float/str (The value is converted to float)</em>) &#8211; The number of seconds to sleep before continuing</li>
 </ul>
 </td>
 </tr>
@@ -196,7 +196,7 @@
 <tbody valign="top">
 <tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
 <li><strong>wait</strong> (<em>string</em>) &#8211; Wait at this point on all hosts not defined with kill=True</li>
-<li><strong>sleep</strong> (<em>int</em>) &#8211; The number of seconds to sleep after the jobs that were waited for have finished.</li>
+<li><strong>sleep</strong> (<em>int/float/str (The value is converted to float)</em>) &#8211; The number of seconds to sleep after the jobs that were waited for have finished.</li>
 </ul>
 </td>
 </tr>
@@ -270,13 +270,13 @@
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;tcpdump -i eth1 -nn -w test.pcap&quot;</span> <span class="p">}</span>
 
 <span class="c"># Wait for tcpdump to start</span>
-<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="s">&quot;1&quot;</span> <span class="p">}</span>
+<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="mi">1</span> <span class="p">}</span>
 
 <span class="p">{</span><span class="s">&quot;host&quot;</span> <span class="p">:</span> <span class="s">&quot;root@zreceiver&quot;</span><span class="p">,</span> <span class="s">&quot;logfile&quot;</span> <span class="p">:</span> <span class="s">&quot;zreceiver.log&quot;</span><span class="p">,</span> <span class="s">&quot;type&quot;</span> <span class="p">:</span> <span class="s">&quot;ssh&quot;</span><span class="p">,</span> <span class="s">&quot;kill&quot;</span> <span class="p">:</span> <span class="bp">True</span>  <span class="p">}</span>
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;/root/streamzero_srv -p 5000 -A&quot;</span> <span class="p">}</span>
 
 <span class="c"># Wait for servers to start up</span>
-<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="s">&quot;1&quot;</span> <span class="p">}</span>
+<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="mi">1</span> <span class="p">}</span>
 
 <span class="p">{</span><span class="s">&quot;host&quot;</span> <span class="p">:</span> <span class="s">&quot;root@rdbsender&quot;</span><span class="p">,</span> <span class="s">&quot;id&quot;</span><span class="p">:</span> <span class="s">&quot;thin-rdb&quot;</span><span class="p">,</span> <span class="s">&quot;logfile&quot;</span> <span class="p">:</span> <span class="s">&quot;rdbsender1.log&quot;</span><span class="p">,</span> <span class="s">&quot;type&quot;</span> <span class="p">:</span> <span class="s">&quot;ssh&quot;</span><span class="p">,</span> <span class="s">&quot;print_output&quot;</span> <span class="p">:</span> <span class="bp">False</span><span class="p">,</span> <span class="s">&quot;color&quot;</span><span class="p">:</span> <span class="s">&quot;yellow&quot;</span><span class="p">,</span> <span class="s">&quot;command_timeout&quot;</span><span class="p">:</span> <span class="bp">None</span> <span class="p">}</span>
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;sysctl -w net.ipv4.tcp_retrans_collapse=0&quot;</span><span class="p">,</span> <span class="s">&quot;print_output&quot;</span> <span class="p">:</span> <span class="bp">False</span>  <span class="p">}</span>
@@ -372,7 +372,7 @@
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;/root/ttrace.sh&quot;</span> <span class="p">}</span>
 
 <span class="c"># Wait for tcpdump to setup</span>
-<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="s">&quot;1&quot;</span> <span class="p">}</span>
+<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="mi">1</span> <span class="p">}</span>
 
 <span class="p">{</span><span class="s">&quot;host&quot;</span> <span class="p">:</span> <span class="s">&quot;root@zreceiver&quot;</span><span class="p">,</span> <span class="s">&quot;logfile&quot;</span> <span class="p">:</span> <span class="s">&quot;zreceiver.log&quot;</span><span class="p">,</span> <span class="s">&quot;type&quot;</span> <span class="p">:</span> <span class="s">&quot;ssh&quot;</span><span class="p">,</span> <span class="s">&quot;kill&quot;</span> <span class="p">:</span> <span class="bp">True</span> <span class="p">}</span>
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;/root/streamzero_srv -p 5000 -A&quot;</span> <span class="p">}</span>
@@ -381,7 +381,7 @@
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;/root/streamzero_srv -p 5001 -A&quot;</span> <span class="p">}</span>
 
 <span class="c"># Wait for servers to start up</span>
-<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="s">&quot;1&quot;</span> <span class="p">}</span>
+<span class="p">{</span><span class="s">&quot;sleep&quot;</span> <span class="p">:</span> <span class="mi">1</span> <span class="p">}</span>
 
 <span class="p">{</span><span class="s">&quot;host&quot;</span> <span class="p">:</span> <span class="s">&quot;root@rdbsender&quot;</span><span class="p">,</span> <span class="s">&quot;id&quot;</span><span class="p">:</span> <span class="s">&quot;thin-rdb&quot;</span><span class="p">,</span> <span class="s">&quot;logfile&quot;</span> <span class="p">:</span> <span class="s">&quot;rdbsender1.log&quot;</span><span class="p">,</span> <span class="s">&quot;type&quot;</span> <span class="p">:</span> <span class="s">&quot;ssh&quot;</span><span class="p">,</span> <span class="s">&quot;print_output&quot;</span> <span class="p">:</span> <span class="bp">False</span><span class="p">,</span> <span class="s">&quot;color&quot;</span><span class="p">:</span> <span class="s">&quot;yellow&quot;</span> <span class="p">}</span>
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;sysctl -w net.ipv4.tcp_retrans_collapse=0&quot;</span> <span class="p">}</span>
@@ -392,7 +392,7 @@
 <span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;/root/streamzero_client -s 10.0.0.13 -p 5001 -P 16001 -v2 -z -x </span><span class="si">%(stream_duration)s</span><span class="s"> </span><span class="si">%(stream)s</span><span class="s"> </span><span class="si">%(stream_count)s</span><span class="s"> </span><span class="si">%(options)s</span><span class="s">&quot;</span><span class="p">,</span> <span class="s">&quot;substitute_id&quot;</span><span class="p">:</span> <span class="s">&quot;thin&quot;</span><span class="p">,</span> <span class="s">&quot;print_output&quot;</span> <span class="p">:</span> <span class="bp">False</span> <span class="p">}</span>
 
 <span class="c"># Wait for jobs (threads) to finish. When processes has finished, sleep 5 seconds before continuing</span>
-<span class="p">{</span><span class="s">&quot;wait&quot;</span> <span class="p">:</span> <span class="s">&quot;&quot;</span><span class="p">,</span> <span class="s">&quot;sleep&quot;</span><span class="p">:</span> <span class="s">&quot;5&quot;</span><span class="p">}</span>
+<span class="p">{</span><span class="s">&quot;wait&quot;</span> <span class="p">:</span> <span class="s">&quot;&quot;</span><span class="p">,</span> <span class="s">&quot;sleep&quot;</span><span class="p">:</span> <span class="mi">5</span> <span class="p">}</span>
 
 <span class="c"># Copy pcap files</span>
 <span class="p">{</span><span class="s">&quot;type&quot;</span> <span class="p">:</span> <span class="s">&quot;scp&quot;</span><span class="p">,</span> <span class="s">&quot;host&quot;</span> <span class="p">:</span> <span class="s">&quot;localhost&quot;</span><span class="p">,</span> <span class="s">&quot;remote_host&quot;</span> <span class="p">:</span> <span class="s">&quot;root@zreceiver&quot;</span><span class="p">,</span> <span class="s">&quot;filename&quot;</span><span class="p">:</span> <span class="s">&quot;test.pcap&quot;</span><span class="p">,</span>  <span class="s">&quot;target_filename&quot;</span><span class="p">:</span> <span class="s">&quot;zreceiver.pcap&quot;</span><span class="p">,</span>   <span class="s">&quot;logfile&quot;</span> <span class="p">:</span> <span class="s">&quot;zreceiver_scp.log&quot;</span><span class="p">,</span>       <span class="p">}</span>

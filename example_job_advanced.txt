@@ -77,7 +77,7 @@
 {"command" : "/root/ttrace.sh" }
 
 # Wait for tcpdump to setup
-{"sleep" : "1" }
+{"sleep" : 1 }
 
 {"host" : "root@zreceiver", "logfile" : "zreceiver.log", "type" : "ssh", "kill" : True }
 {"command" : "/root/streamzero_srv -p 5000 -A" }
@@ -86,7 +86,7 @@
 {"command" : "/root/streamzero_srv -p 5001 -A" }
 
 # Wait for servers to start up
-{"sleep" : "1" }
+{"sleep" : 1 }
 
 {"host" : "root@rdbsender", "id": "thin-rdb", "logfile" : "rdbsender1.log", "type" : "ssh", "print_output" : False, "color": "yellow" }
 {"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
@@ -97,7 +97,7 @@
 {"command" : "/root/streamzero_client -s 10.0.0.13 -p 5001 -P 16001 -v2 -z -x %(stream_duration)s %(stream)s %(stream_count)s %(options)s", "substitute_id": "thin", "print_output" : False }
 
 # Wait for jobs (threads) to finish. When processes has finished, sleep 5 seconds before continuing
-{"wait" : "", "sleep": "5"}
+{"wait" : "", "sleep": 5 }
 
 # Copy pcap files
 {"type" : "scp", "host" : "localhost", "remote_host" : "root@zreceiver", "filename": "test.pcap",  "target_filename": "zreceiver.pcap",   "logfile" : "zreceiver_scp.log",       }

@@ -97,14 +97,14 @@ The following dictionaries can be defined in the config:
 .. py:function:: sleep(sleep)
 
     :param sleep: The number of seconds to sleep before continuing
-    :type sleep: int
+    :type sleep: int/float/str (The value is converted to float)
 
 .. py:function:: wait(wait, sleep=0)
 
     :param wait: Wait at this point on all hosts not defined with kill=True
     :type wait: string
     :param sleep: The number of seconds to sleep after the jobs that were waited for have finished.
-    :type sleep: int
+    :type sleep: int/float/str (The value is converted to float)
 
 
 Config Examples

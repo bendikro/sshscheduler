@@ -37,13 +37,13 @@
 {"command" : "tcpdump -i eth1 -nn -w test.pcap" }
 
 # Wait for tcpdump to start
-{"sleep" : "1" }
+{"sleep" : 1 }
 
 {"host" : "root@zreceiver", "logfile" : "zreceiver.log", "type" : "ssh", "kill" : True  }
 {"command" : "/root/streamzero_srv -p 5000 -A" }
 
 # Wait for servers to start up
-{"sleep" : "1" }
+{"sleep" : 1 }
 
 {"host" : "root@rdbsender", "id": "thin-rdb", "logfile" : "rdbsender1.log", "type" : "ssh", "print_output" : False, "color": "yellow", "command_timeout": None }
 {"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0", "print_output" : False  }
