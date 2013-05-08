@@ -44,7 +44,7 @@ except:
 
 settings = { "session_name": "sshscheduler_example_session", "default_user": None, "results_dir": "results", "simulate": False }
 default_session_jobs_conf = {"session_jobs": None, "default_session_job_timeout_secs": None, "delay_between_session_jobs_secs": 0, "default_settings": None}
-default_job_conf = { "type": None, "color": None, "print_output": False, "command_timeout": None, "user": None, "return_values": {"pass": [0], "fail": [] } }
+default_job_conf = { "type": None, "color": None, "print_output": False, "command_timeout": None, "user": None, "cleanup": False, "return_values": {"pass": [0], "fail": [] } }
 default_command_conf = { "command_timeout": None, "return_values": {"pass": [], "fail": [] } }
 default_session_conf = { "name_id": None, }
 default_wait_sleep_conf = { "sleep": 0, "type": None }
@@ -598,7 +598,7 @@ def setup_log_directories():
     return results_dir, log_dir, last_dir, last_log_dir
 
 
-def run_session_job(session_job_conf, jobs):
+def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
     global stopped, threads, threads_to_kill, sigint_ctrl, gather_results
     session_job_start_time = datetime.now()
 
@@ -609,6 +609,26 @@ def run_session_job(session_job_conf, jobs):
                                                                           str(session_job_start_time),
                                                                           "in test mode" if settings["simulate"] else ""),
                 color='yellow' if settings["simulate"] else 'green')
+
+
+    def do_host_job(job):
+        job[0]["log_dir"] = last_log_dir
+        job[0]["last_dir"] = last_dir
+
+        # Prefix logfile name with session job name_id
+        if "logfile" in job[0]:
+            job[0]["logfile_name"] = job[0]["logfile"]
+
+        t = Job(job[0], session_job_conf, job[1])
+        if job[0].has_key("kill") and job[0]["kill"] is True:
+            threads_to_kill.append(t)
+        else:
+            threads.append(t)
+        t.start()
+        # We must wait on this job immediately before continuing
+        if job[0].has_key("wait") and job[0]["wait"]:
+            join_threads([t])
+
     current_index = 0
     for i in range(len(jobs)):
         if stopped or fatal_abort:
@@ -617,22 +637,7 @@ def run_session_job(session_job_conf, jobs):
         job = jobs[i]
 
         if job[0].has_key("host"):
-            job[0]["log_dir"] = last_log_dir
-            job[0]["last_dir"] = last_dir
-
-            # Prefix logfile name with session job name_id
-            if "logfile" in job[0]:
-                job[0]["logfile_name"] = job[0]["logfile"]
-
-            t = Job(job[0], session_job_conf, job[1])
-            if job[0].has_key("kill") and job[0]["kill"] is True:
-                threads_to_kill.append(t)
-            else:
-                threads.append(t)
-            t.start()
-            # We must wait on this job immediately before continuing
-            if job[0].has_key("wait") and job[0]["wait"]:
-                join_threads([t])
+            do_host_job(job)
         elif job[0].has_key("wait"):
             timeout = None
             if session_job_conf:
@@ -667,57 +672,66 @@ def run_session_job(session_job_conf, jobs):
 
     end_time = datetime.now()
 
-    if gather_results:
+
+    # Do cleanup jobs (defined by cleanup attribute in host conf)
+    if cleanup_jobs:
+        print_t("Running cleanup jobs...", color="green", verbose=1)
+        threads = []
+        stopped = False
+        for job in cleanup_jobs:
+            if not (job[0]["type"] == "ssh" and job[0]["cleanup"]):
+                break
+            do_host_job(job)
+
+    if gather_results and scp_jobs:
         # Gather results
         if session_job_conf:
             print_t("Session job '%s' has finished." % session_job_conf["name_id"], color='green')
 
-        if current_index + 1 != len(jobs):
-            print_t("Saving files to: %s" % results_dir, color="green")
-            threads = []
-            stopped = False
-            for i in range(current_index + 1, len(jobs)):
-                job = jobs[i]
-                # We only want the scp jobs here
-                if not job[0]["type"] == "scp":
-                    continue
+        print_t("Saving files to: %s" % results_dir, color="green")
+        threads = []
+        stopped = False
+        for job in scp_jobs:
+            # We only want the scp jobs here
+            if not job[0]["type"] == "scp":
+                continue
 
-                # Prefix logfile name with session job name_id
-                if "logfile" in job[0]:
-                    job[0]["logfile_name"] = job[0]["logfile"]
+            # Prefix logfile name with session job name_id
+            if "logfile" in job[0]:
+                job[0]["logfile_name"] = job[0]["logfile"]
 
-                conf = job[0]
-                conf["log_dir"] = last_log_dir
+            conf = job[0]
+            conf["log_dir"] = last_log_dir
 
-                target_filename = conf["target_filename"]
-                # Prefix name with session job name_id
-                if session_job_conf and session_job_conf["name_id"]:
-                    target_filename = "%s_%s" % (session_job_conf["name_id"], target_filename)
+            target_filename = conf["target_filename"]
+            # Prefix name with session job name_id
+            if session_job_conf and session_job_conf["name_id"]:
+                target_filename = "%s_%s" % (session_job_conf["name_id"], target_filename)
 
-                target_file = "%s/%s" % (results_dir, target_filename)
-                link_file = "%s/%s" % (last_dir, target_filename)
-                host, user = get_host_and_user(conf["remote_host"], conf["user"])
-                scp_cmd = "scp %s@%s:%s %s" % (user, host, conf["filename"], target_file)
+            target_file = "%s/%s" % (results_dir, target_filename)
+            link_file = "%s/%s" % (last_dir, target_filename)
+            host, user = get_host_and_user(conf["remote_host"], conf["user"])
+            scp_cmd = "scp %s@%s:%s %s" % (user, host, conf["filename"], target_file)
 
-                ln_cmd = "ln %s %s" % (target_file, link_file)
+            ln_cmd = "ln %s %s" % (target_file, link_file)
 
-                cmd_scp_dict = copy.deepcopy(default_command_conf)
-                cmd_ln_dict = copy.deepcopy(default_command_conf)
-                cmd_scp_dict["command"] = scp_cmd
-                cmd_ln_dict["command"] = ln_cmd
-                cmd_scp_dict["return_values"].update(conf["return_values"])
-                cmd_ln_dict["return_values"].update(conf["return_values"])
-                commands = [cmd_scp_dict, cmd_ln_dict]
-                t = Job(job[0], session_job_conf, commands)
-                threads.append(t)
-                t.start()
+            cmd_scp_dict = copy.deepcopy(default_command_conf)
+            cmd_ln_dict = copy.deepcopy(default_command_conf)
+            cmd_scp_dict["command"] = scp_cmd
+            cmd_ln_dict["command"] = ln_cmd
+            cmd_scp_dict["return_values"].update(conf["return_values"])
+            cmd_ln_dict["return_values"].update(conf["return_values"])
+            commands = [cmd_scp_dict, cmd_ln_dict]
+            t = Job(job[0], session_job_conf, commands)
+            threads.append(t)
+            t.start()
 
-            if not join_current_threads():
-                print_t("Last join interrupted by CTRL-c")
+        if not join_current_threads():
+            print_t("Last join interrupted by CTRL-c")
 
-            # Copy logs to proper directory
-            cmd = "cp %s/*.log %s/" % (last_log_dir, log_dir)
-            out = os.popen(cmd).read()
+        # Copy logs to proper directory
+        cmd = "cp %s/*.log %s/" % (last_log_dir, log_dir)
+        out = os.popen(cmd).read()
 
         if session_job_conf:
             line = "Execution of session job '%s' finished in %s seconds at %s" % (session_job_conf["name_id"], str((end_time - session_job_start_time)), str(end_time))
@@ -739,9 +753,10 @@ def get_host_and_user(host, user):
     return host, user
 
 def parse_job_conf(filename):
-    global settings
-    global session_jobs
+    global settings, session_jobs
     jobs = []
+    cleanup_jobs = []
+    scp_jobs = []
     job = None
     f = open(filename, 'r')
     lines = f.readlines()
@@ -771,23 +786,28 @@ def parse_job_conf(filename):
                 settings["default_user"] = os.getenv('USER')
 
         elif d.has_key("gather_results"):
-            if job is not None:
-                jobs.append(job)
             jobs.append([d])
             job = None
         # New host
         elif d.has_key("host"):
             job_conf = copy.deepcopy(default_job_conf)
             job_conf.update(d)
+            job = [job_conf, []]
             if job_conf["user"] is None:
                 job_conf["user"] = settings["default_user"]
             if "ssh" in job_conf:
                 job_conf["type"] = "ssh"
             elif "scp" in job_conf:
-                job_conf["type"] = "ssh"
-            if job is not None:
+                job_conf["type"] = "scp"
+
+            if job_conf["cleanup"]:
+                job_conf["wait"] = True
+                cleanup_jobs.append(job)
+            elif job_conf["type"] == "scp":
+                scp_jobs.append(job)
+            else:
                 jobs.append(job)
-            job = [job_conf, []]
+
         # Command for host
         elif d.has_key("command"):
             cmd_conf = copy.deepcopy(default_command_conf)
@@ -800,14 +820,13 @@ def parse_job_conf(filename):
             else:
                 cmd_conf["return_values"] = job[0]["return_values"].copy()
 
+            # If no 'command_timeout' in command dict, use default from host dict
             if not "command_timeout" in d:
                 cmd_conf["command_timeout"] = job[0]["command_timeout"]
 
             job[1].append(cmd_conf)
         # Do a sleep or wait for all previous jobs
         elif d.has_key("sleep") or d.has_key("wait"):
-            if job is not None:
-                jobs.append(job)
             conf = copy.deepcopy(default_wait_sleep_conf)
             conf.update(d)
             jobs.append([conf])
@@ -841,7 +860,7 @@ def parse_job_conf(filename):
     # Add last job
     if job is not None:
         jobs.append(job)
-    return jobs
+    return jobs, cleanup_jobs, scp_jobs
 
 def to_bool(value):
     """
@@ -988,7 +1007,7 @@ def main():
     if args.print_output:
         print_command_output = to_bool(args.print_output)
 
-    jobs = parse_job_conf(args.file)
+    jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.file)
 
     if args.simulate:
         settings["simulate"] = True
@@ -1020,9 +1039,9 @@ def main():
                 print_t("Sleeping %d seconds before next session job." % session_jobs["delay_between_session_jobs_secs"])
                 if not settings["simulate"]:
                     time.sleep(session_jobs["delay_between_session_jobs_secs"])
-            run_session_job(session_job, jobs)
+            run_session_job(session_job, jobs, cleanup_jobs, scp_jobs)
     else:
-        run_session_job(None, jobs)
+        run_session_job(None, jobs, cleanup_jobs, scp_jobs)
 
     if sigint_ctrl:
         print_t("Session stopped by SIGINT signal")

@@ -54,6 +54,10 @@ The following dictionaries can be defined in the config:
     :type type: string ssh/scp
     :param kill: If this job is expected to finish or if it should be killed
     :type kill: bool
+    :param wait: Wait on the commands on this host before continuing with later hosts
+    :type wait: bool
+    :param cleanup: If this job does cleanup commands. It will be run after the wait-call even if the session job was aborted. Sets wait to True.
+    :type cleanup: bool
     :param user: The remote user to connect to
     :type user: string
     :param print_output: If the output from the commands run on this host should be printed to terminal

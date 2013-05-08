@@ -104,6 +104,8 @@
 <li><strong>logfile</strong> (<em>string</em>) &#8211; The name of the log file for this job</li>
 <li><strong>type</strong> (<em>string ssh/scp</em>) &#8211; The type of job</li>
 <li><strong>kill</strong> (<em>bool</em>) &#8211; If this job is expected to finish or if it should be killed</li>
+<li><strong>wait</strong> (<em>bool</em>) &#8211; Wait on the commands on this host before continuing with later hosts</li>
+<li><strong>cleanup</strong> (<em>bool</em>) &#8211; If this job does cleanup commands. It will be run after the wait-call even if the session job was aborted. Sets wait to True.</li>
 <li><strong>user</strong> (<em>string</em>) &#8211; The remote user to connect to</li>
 <li><strong>print_output</strong> (<em>bool</em>) &#8211; If the output from the commands run on this host should be printed to terminal</li>
 </ul>
@@ -393,6 +395,11 @@
 
 <span class="c"># Wait for jobs (threads) to finish. When processes has finished, sleep 5 seconds before continuing</span>
 <span class="p">{</span><span class="s">&quot;wait&quot;</span> <span class="p">:</span> <span class="s">&quot;&quot;</span><span class="p">,</span> <span class="s">&quot;sleep&quot;</span><span class="p">:</span> <span class="mi">5</span> <span class="p">}</span>
+
+<span class="c"># Cleanup</span>
+<span class="p">{</span><span class="s">&quot;host&quot;</span> <span class="p">:</span> <span class="s">&quot;root@bridge2&quot;</span><span class="p">,</span> <span class="s">&quot;logfile&quot;</span> <span class="p">:</span> <span class="s">&quot;bridge2_cleanup.log&quot;</span><span class="p">,</span> <span class="s">&quot;type&quot;</span> <span class="p">:</span> <span class="s">&quot;ssh&quot;</span><span class="p">,</span> <span class="s">&quot;cleanup&quot;</span><span class="p">:</span> <span class="bp">True</span> <span class="p">}</span>
+<span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;sysctl -w net.ipv4.tcp_retrans_collapse=0&quot;</span> <span class="p">}</span>
+<span class="p">{</span><span class="s">&quot;command&quot;</span> <span class="p">:</span> <span class="s">&quot;tc qdisc del dev eth1 root&quot;</span><span class="p">,</span> <span class="s">&quot;return_values&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s">&quot;pass&quot;</span><span class="p">:[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">]}</span> <span class="p">}</span> <span class="c"># If no root device exists, exit value 2 should also pass</span>
 
 <span class="c"># Copy pcap files</span>
 <span class="p">{</span><span class="s">&quot;type&quot;</span> <span class="p">:</span> <span class="s">&quot;scp&quot;</span><span class="p">,</span> <span class="s">&quot;host&quot;</span> <span class="p">:</span> <span class="s">&quot;localhost&quot;</span><span class="p">,</span> <span class="s">&quot;remote_host&quot;</span> <span class="p">:</span> <span class="s">&quot;root@zreceiver&quot;</span><span class="p">,</span> <span class="s">&quot;filename&quot;</span><span class="p">:</span> <span class="s">&quot;test.pcap&quot;</span><span class="p">,</span>  <span class="s">&quot;target_filename&quot;</span><span class="p">:</span> <span class="s">&quot;zreceiver.pcap&quot;</span><span class="p">,</span>   <span class="s">&quot;logfile&quot;</span> <span class="p">:</span> <span class="s">&quot;zreceiver_scp.log&quot;</span><span class="p">,</span>       <span class="p">}</span>

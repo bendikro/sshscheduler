@@ -99,6 +99,11 @@
 # Wait for jobs (threads) to finish. When processes has finished, sleep 5 seconds before continuing
 {"wait" : "", "sleep": 5 }
 
+# Cleanup
+{"host" : "root@bridge2", "logfile" : "bridge2_cleanup.log", "type" : "ssh", "cleanup": True }
+{"command" : "sysctl -w net.ipv4.tcp_retrans_collapse=0" }
+{"command" : "tc qdisc del dev eth1 root", "return_values": {"pass":[0,2]} } # If no root device exists, exit value 2 should also pass
+
 # Copy pcap files
 {"type" : "scp", "host" : "localhost", "remote_host" : "root@zreceiver", "filename": "test.pcap",  "target_filename": "zreceiver.pcap",   "logfile" : "zreceiver_scp.log",       }
 {"type" : "scp", "host" : "localhost", "remote_host" : "root@rdbsender", "filename": "test.pcap",  "target_filename": "rdbsender.pcap",   "logfile" : "rdbsender_scp.log",       }
