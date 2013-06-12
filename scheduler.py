@@ -49,7 +49,6 @@ default_command_conf = { "command_timeout": None, "return_values": {"pass": [], 
 default_session_conf = { "name_id": None, }
 default_wait_sleep_conf = { "sleep": 0, "type": None }
 
-session_jobs = None
 threads = []
 threads_to_kill = []
 
@@ -603,7 +602,7 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
     session_job_start_time = datetime.now()
 
     if session_job_conf:
-        print_t("Running session job '%s' (%s) (Timeout: %s) at %s %s" % (session_job_conf["name_id"],
+        print_t("\nRunning session job '%s' (%s) (Timeout: %s) at %s %s" % (session_job_conf["name_id"],
                                                                           session_job_conf["description"],
                                                                           session_job_conf["timeout_secs"],
                                                                           str(session_job_start_time),
@@ -752,7 +751,7 @@ def get_host_and_user(host, user):
         host = m.group(2)
     return host, user
 
-def parse_job_conf(filename):
+def parse_job_conf(filename, custom_session_jobs=None):
     global settings, session_jobs
     jobs = []
     cleanup_jobs = []
@@ -761,6 +760,27 @@ def parse_job_conf(filename):
     f = open(filename, 'r')
     lines = f.readlines()
     eval_lines = ""
+
+    def handle_session_job():
+        for sj in session_jobs["session_jobs"]:
+            if not "timeout_secs" in sj:
+                sj["timeout_secs"] = session_jobs["default_session_job_timeout_secs"]
+            if not "substitutions" in sj:
+                continue
+            for sub in sj["substitutions"].keys():
+                # If it refers to default settings, add these to the settings dict
+                if session_jobs["default_settings"]:
+                    # Exists on both default settings and sub
+                    if sub in session_jobs["default_settings"]:
+                        sub_settings = copy.deepcopy(session_jobs["default_settings"][sub])
+                        sub_settings.update(sj["substitutions"][sub])
+                        sj["substitutions"][sub] = sub_settings
+
+                    diff = set(session_jobs["default_settings"].keys()) - set(sj["substitutions"].keys())
+                    for key in diff:
+                        # Only in default settings, so add to sub
+                        sj["substitutions"][key] = session_jobs["default_settings"][key]
+
     for i in range(len(lines)):
         again = True
         # Remove content after #
@@ -832,35 +852,23 @@ def parse_job_conf(filename):
             jobs.append([conf])
             job = None
         elif d.has_key("session_jobs"):
-            session_jobs = default_session_jobs_conf
+            session_jobs = default_session_jobs_conf.copy()
             session_jobs.update(d)
-            for sj in session_jobs["session_jobs"]:
-                if not "timeout_secs" in sj:
-                    sj["timeout_secs"] = session_jobs["default_session_job_timeout_secs"]
-                if not "substitutions" in sj:
-                    continue
-                for sub in sj["substitutions"].keys():
-                    # If it refers to default settings, add these to the settings dict
-                    if session_jobs["default_settings"]:
-                        # Exists on both default settings and sub
-                        if sub in session_jobs["default_settings"]:
-                            sub_settings = copy.deepcopy(session_jobs["default_settings"][sub])
-                            sub_settings.update(sj["substitutions"][sub])
-                            sj["substitutions"][sub] = sub_settings
+            handle_session_job()
 
-                        diff = set(session_jobs["default_settings"].keys()) - set(sj["substitutions"].keys())
-                        for key in diff:
-                            # Only in default settings, so add to sub
-                            sj["substitutions"][key] = session_jobs["default_settings"][key]
     if eval_lines:
         print_t("You have a syntax error in the job config!", color="red")
         print_t("Failed to parse config lines: %s" % eval_lines, color="red")
         sys.exit(0)
 
+    if not custom_session_jobs is None:
+        session_jobs["session_jobs"] = custom_session_jobs
+        handle_session_job()
+
     # Add last job
     if job is not None:
         jobs.append(job)
-    return jobs, cleanup_jobs, scp_jobs
+    return settings, session_jobs, jobs, cleanup_jobs, scp_jobs
 
 def to_bool(value):
     """
@@ -984,11 +992,7 @@ def write_info_file(args, results_dir):
     f.close()
     os.symlink(os.path.abspath(filepath), os.path.join(last_dir, filename))
 
-def main():
-    global results_dir, log_dir, last_dir, last_log_dir, print_commands, session_start_time, lockFileHandler
-    signal_handler = SignalHandler()
-    signal.signal(signal.SIGINT, signal_handler.handle_signal)
-
+def parse_args():
     argparser = argparse.ArgumentParser(description="Run test sessions")
     argparser.add_argument("-v", "--verbose",  help="Enable verbose output. Can be applied multiple times", action='count', default=0, required=False)
     argparser.add_argument("-x", "--exceptions",  help="Print full exception traces", action='store_true', required=False, default=False)
@@ -1000,6 +1004,12 @@ def main():
     argparser.add_argument("-f", "--force",  help="Ignores any existing lock file forcing the session to run.", action='store_true', required=False, default=False)
     argparser.add_argument("file", help="The file containing the the commands to run")
     args = argparser.parse_args()
+    return args
+
+def setup(args, custom_session_jobs=None):
+    global results_dir, log_dir, last_dir, last_log_dir, print_commands, session_start_time, lockFileHandler
+    signal_handler = SignalHandler()
+    signal.signal(signal.SIGINT, signal_handler.handle_signal)
 
     sys.stdout.verbose = args.verbose
     sys.stdout.print_exceptions = args.exceptions
@@ -1007,7 +1017,7 @@ def main():
     if args.print_output:
         print_command_output = to_bool(args.print_output)
 
-    jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.file)
+    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.file, custom_session_jobs)
 
     if args.simulate:
         settings["simulate"] = True
@@ -1022,11 +1032,15 @@ def main():
 
     cmd = "rm -f %s/*.* %s/*.*" % (last_dir, last_log_dir)
     out = os.popen(cmd).read()
+    return settings, session_jobs, jobs, cleanup_jobs, scp_jobs
 
+def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
+    global results_dir, session_start_time
     session_start_time = datetime.now()
     print_t("Starting session '%s' at %s %s" % (settings["session_name"], str(session_start_time),
                                                 "in test mode" if settings["simulate"] else ""),
             color='yellow' if settings["simulate"] else 'green')
+    print_t("Session jobs to run: %d" % len(session_jobs))
 
     # session_jobs defined in config
     if session_jobs:
@@ -1065,9 +1079,9 @@ def main():
     write_info_file(args, results_dir)
 
 
-if __name__ == "__main__":
+def do_run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
     try:
-        main()
+        run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args)
     except SystemExit:
         pass
     except:
@@ -1079,4 +1093,12 @@ if __name__ == "__main__":
         if lockFileHandler:
             lockFileHandler.stop()
         sys.stdout.close()
+
+def main():
+    args = parse_args()
+    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = setup(args)
+    do_run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args)
+
+if __name__ == "__main__":
+    main()
 
