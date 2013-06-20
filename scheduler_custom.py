@@ -37,10 +37,10 @@ def main():
     options_values = ["", "-r"]
     payload_values = [100]
     itt_values = [100, 50]
-    delay_values = [15, 50, 100]
+    rtt_values = [30, 100, 200]
     stream_count_values = [1]
 
-    # We want session jobs that are structued something like this:
+    # We want session jobs that are structured something like this:
     """
     {'description': '1 thin rdb stream with fixed loss 1',
      'name_id': '1_thin_rdb_stream-fixed-loss_1',
@@ -55,14 +55,15 @@ def main():
     """
     session_job_list = []
     # Loop over the product of all the values in the value lists
-    for loss, options, stream_count, itt, delay, payload in itertools.product(loss_values, options_values, stream_count_values, itt_values, delay_values, payload_values):
+    for loss, options, stream_count, itt, rtt, payload in itertools.product(loss_values, options_values, stream_count_values, itt_values, rtt_values, payload_values):
         sj = {}
         sj['substitutions'] = {}
         sj['substitutions']["thin-rdb"] = {}
-        sj["substitutions"]["thin-rdb"]["loss"] = "loss %s" % loss
         sj["substitutions"]["thin-rdb"]["options"] = options
         sj["substitutions"]["thin-rdb"]["stream"] = "-I i:%d,S:%d" % (itt, payload)
         sj["substitutions"]["thin-rdb"]["stream_count"] = "-c %d" % stream_count
+        sj["substitutions"]["netem_uplink"]   = { "delay": "delay %dms" % (rtt/2), "loss": "loss %s" % loss }
+        sj["substitutions"]["netem_downlink"] = { "delay": "delay %dms" % (rtt/2), "loss": "" }
 
         stream_type = "rdb"
         if options == "":
@@ -73,11 +74,11 @@ def main():
         else:
             loss_type = "%s" % loss
 
-        sj["description"] = "%d thin %sstream with payload %d itt %d loss %s" % (stream_count, stream_type + "_" if stream_type else "", payload, itt, loss_type)
-        sj["name_id"] =     "%d_thin_%sstream_payload_%d_itt_%d_loss_%s"  % (stream_count, stream_type + "_" if stream_type else "", payload, itt, loss_type)
+        sj["description"] = "%d thin %sstream with payload %d, itt %d rtt: %d, loss %s" % (stream_count, stream_type + "_" if stream_type else "", payload, itt, rtt, loss_type)
+        sj["name_id"] =     "%d_thin_%sstream_payload_%d_itt_%d_rtt_%d_loss_%s"  % (stream_count, stream_type + "_" if stream_type else "", payload, itt, rtt, loss_type)
         session_job_list.append(sj)
 
-#    pp.pprint(session_job_list)
+    pp.pprint(session_job_list)
 
     settings, session_jobs, jobs, cleanup_jobs, scp_jobs = scheduler.setup(args, custom_session_jobs=session_job_list)
     scheduler.do_run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args)

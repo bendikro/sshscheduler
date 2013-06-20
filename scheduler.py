@@ -198,7 +198,10 @@ class StdoutSplit:
             while True:
                 if "color" in kwargs and termcolor:
                     if len(arg) > 1:
-                        cprint("When using colors, print only accepts one string argument, %d was given!" % len(arg), color='red')
+                        import inspect
+                        frame, filename, line_number, function_name, lines,index = inspect.getouterframes(inspect.currentframe())[2]
+                        cprint("Error in python code, file: '%s', function: '%s', line: %d" % (filename, function_name, line_number), color='red')
+                        cprint("When using the color argument, print only accepts one string argument, %d was given!" % len(arg), color='red')
                         traceback.print_stack()
                     else:
                         try:
@@ -331,10 +334,15 @@ class Job(Thread):
                 try:
                     command = command % self.session_job_conf["substitutions"][c["substitute_id"]]
                 except KeyError, k:
-                    print_t("Encountered KeyError when inserting subsitution settings: %s" % k, color="red")
+                    print_t("Encountered KeyError when inserting substitution settings: %s" % k, color="red")
                     abort_job(results=False, fatal=True)
                     sys.exit(1)
-            # Execute commands in separate bash? Need if using pipes..
+                except ValueError, err:
+                    print_t("Encountered ValueError when inserting substitution settings: %s" % err, color="red")
+                    print_t("command: '%s', substitute_id: '%s', substitution dict: '%s'" % (command, c["substitute_id"], self.session_job_conf["substitutions"][c["substitute_id"]]))
+                    abort_job(results=False, fatal=True)
+                    sys.exit(1)
+            # Execute commands in separate bash? Needed if using pipes..
             command = "/bin/bash -c '%s'" % command
 
             if stopped:
@@ -762,11 +770,20 @@ def parse_job_conf(filename, custom_session_jobs=None):
     eval_lines = ""
 
     def handle_session_job():
+        name_ids = []
         for sj in session_jobs["session_jobs"]:
             if not "timeout_secs" in sj:
                 sj["timeout_secs"] = session_jobs["default_session_job_timeout_secs"]
             if not "substitutions" in sj:
                 continue
+
+            if sj["name_id"] in name_ids:
+                print_t("Duplicate name_id in session_jobs list: %s" % sj["name_id"], color="red")
+                print_t("The name_id attribute must be unique for each session job!", color="red")
+                sys.exit(0)
+            else:
+                name_ids.append(sj["name_id"])
+
             for sub in sj["substitutions"].keys():
                 # If it refers to default settings, add these to the settings dict
                 if session_jobs["default_settings"]:
@@ -784,8 +801,10 @@ def parse_job_conf(filename, custom_session_jobs=None):
     for i in range(len(lines)):
         again = True
         # Remove content after #
-        line = lines[i].split("#")[0].strip()
-        if not line:
+        line = lines[i]
+        if line.find('#') != -1:
+            line = line.split("#")[0]
+        if not line.strip():
             continue
         try:
             eval_lines += line
@@ -858,7 +877,10 @@ def parse_job_conf(filename, custom_session_jobs=None):
 
     if eval_lines:
         print_t("You have a syntax error in the job config!", color="red")
-        print_t("Failed to parse config lines: %s" % eval_lines, color="red")
+        #print_t("Failed to parse config lines: %s" % eval_lines, color="red")
+        import parser
+        e = parser.expr(eval_lines)
+        parser.compilest(e)
         sys.exit(0)
 
     if not custom_session_jobs is None:
@@ -994,7 +1016,7 @@ def write_info_file(args, results_dir):
 
 def parse_args():
     argparser = argparse.ArgumentParser(description="Run test sessions")
-    argparser.add_argument("-v", "--verbose",  help="Enable verbose output. Can be applied multiple times", action='count', default=0, required=False)
+    argparser.add_argument("-v", "--verbose",  help="Enable verbose output. Can be applied multiple times (Max 3)", action='count', default=0, required=False)
     argparser.add_argument("-x", "--exceptions",  help="Print full exception traces", action='store_true', required=False, default=False)
     argparser.add_argument("-s", "--simulate",  help="Simulate only, do not execute commands.", action='store_true', required=False)
     argparser.add_argument("-c", "--print-commands",  help="Print the commands being executed.", action='store_true', required=False)
@@ -1002,7 +1024,7 @@ def parse_args():
                                "This overrides any settings in the config file.", required=False)
     argparser.add_argument("-m", "--comment",  help="Comment to add to a file in the results directory.", required=False, default=None)
     argparser.add_argument("-f", "--force",  help="Ignores any existing lock file forcing the session to run.", action='store_true', required=False, default=False)
-    argparser.add_argument("file", help="The file containing the the commands to run")
+    argparser.add_argument("config-file", help="The configuration file with the commands to run.")
     args = argparser.parse_args()
     return args
 
@@ -1040,10 +1062,10 @@ def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
     print_t("Starting session '%s' at %s %s" % (settings["session_name"], str(session_start_time),
                                                 "in test mode" if settings["simulate"] else ""),
             color='yellow' if settings["simulate"] else 'green')
-    print_t("Session jobs to run: %d" % len(session_jobs))
 
     # session_jobs defined in config
     if session_jobs:
+        print_t("Session jobs to run: %d" % len(session_jobs["session_jobs"]))
         for i, session_job in enumerate(session_jobs["session_jobs"]):
             if fatal_abort or sigint_ctrl:
                 break
