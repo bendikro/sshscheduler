@@ -42,6 +42,15 @@ except:
     print("termcolor could not be found. To enable colors in terminal output, install termcolor.")
     termcolor = False
 
+def check_pexpect_version():
+    try:
+        version = float(pexpect.__version__)
+        if version < 2.4:
+            print_t("Minimum required pexpect version is 2.4. Current installed version is %.1f" % version, color="red")
+            sys.exit(0)
+    except:
+        print_t("Error occured when checking pexpect version!")
+
 settings = { "session_name": "sshscheduler_example_session", "default_user": None, "results_dir": "results", "simulate": False }
 default_session_jobs_conf = {"session_jobs": None, "default_session_job_timeout_secs": None, "delay_between_session_jobs_secs": 0, "default_settings": None}
 default_job_conf = { "type": None, "color": None, "print_output": False, "command_timeout": None, "user": None, "cleanup": False, "return_values": {"pass": [0], "fail": [] } }
@@ -760,7 +769,7 @@ def get_host_and_user(host, user):
     return host, user
 
 def parse_job_conf(filename, custom_session_jobs=None):
-    global settings, session_jobs
+    global settings
     jobs = []
     cleanup_jobs = []
     scp_jobs = []
@@ -768,6 +777,7 @@ def parse_job_conf(filename, custom_session_jobs=None):
     f = open(filename, 'r')
     lines = f.readlines()
     eval_lines = ""
+    session_jobs = None
 
     def handle_session_job():
         name_ids = []
@@ -1030,6 +1040,7 @@ def parse_args():
 
 def setup(args, custom_session_jobs=None):
     global results_dir, log_dir, last_dir, last_log_dir, print_commands, session_start_time, lockFileHandler
+    check_pexpect_version()
     signal_handler = SignalHandler()
     signal.signal(signal.SIGINT, signal_handler.handle_signal)
 
