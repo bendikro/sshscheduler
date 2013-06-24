@@ -69,6 +69,7 @@ sigint_ctrl = False
 print_t = None
 print_commands = False
 print_command_output = None
+no_terminal_output = False
 
 global_timeout_expired = 0
 session_start_time = None
@@ -96,24 +97,26 @@ class StdoutSplit:
     def write(self, string):
         self.write_lock.acquire() # will block if lock is already held
         if self.line_prefix:
-            if (print_command_output is True or (self.print_to_stdout and print_command_output is None)):
-                prefix = self.line_prefix
+            # This is output from a command
+            string = string.replace("\r", "")
+
+            if not no_terminal_output and \
+               (print_command_output is True or (self.print_to_stdout and print_command_output is None)):
                 prefixed_string = ""
                 line_count = 0
-                thread_prefix = self.get_thread_prefix()
                 terminal_prefix = "%-25s | " % "COMMAND OUTPUT"
-                prefix = terminal_prefix + prefix
+                prefix = terminal_prefix + self.line_prefix
                 if self.color and termcolor:
                     prefix = colored(prefix, self.color)
-
-                string = string.replace("\r", "")
                 for line in string.splitlines():
                     prefixed_string += prefix + line + "\n"
                     line_count += 1
                 self.terminal_print_cache += prefixed_string
                 self.terminal_print_cache_lines += line_count
-        else:
+
+        elif not no_terminal_output:
             print(string, file=self.stdout, end="")
+
         if self.output_file:
             try:
                 print(string, file=self.output_file, end="")
@@ -1029,9 +1032,11 @@ def parse_args():
     argparser.add_argument("-v", "--verbose",  help="Enable verbose output. Can be applied multiple times (Max 3)", action='count', default=0, required=False)
     argparser.add_argument("-x", "--exceptions",  help="Print full exception traces", action='store_true', required=False, default=False)
     argparser.add_argument("-s", "--simulate",  help="Simulate only, do not execute commands.", action='store_true', required=False)
-    argparser.add_argument("-c", "--print-commands",  help="Print the commands being executed.", action='store_true', required=False)
-    argparser.add_argument("-p", "--print-output", metavar='boolean string', help="Print the terminal output from all the commands to stdout."\
-                               "This overrides any settings in the config file.", required=False)
+    argparser.add_argument("-c", "--print-commands",  help="Print the shell commands being executed.", action='store_true', required=False)
+    argparser.add_argument("-pco", "--print-command-output", metavar='boolean string', help="Print the output from all the remote commands to stdout."\
+                           "This overrides any settings in the config file.", required=False)
+    argparser.add_argument("-nto", "--no-terminal-output", action='store_true', help="Do not print anything to terminal."\
+                           "The terminal output will only be written to terminal.log", required=False, default=False)
     argparser.add_argument("-m", "--comment",  help="Comment to add to a file in the results directory.", required=False, default=None)
     argparser.add_argument("-f", "--force",  help="Ignores any existing lock file forcing the session to run.", action='store_true', required=False, default=False)
     argparser.add_argument("config_file", help="The configuration file with the commands to run.")
@@ -1039,7 +1044,8 @@ def parse_args():
     return args
 
 def setup(args, custom_session_jobs=None):
-    global results_dir, log_dir, last_dir, last_log_dir, print_commands, session_start_time, lockFileHandler
+    global results_dir, log_dir, last_dir, last_log_dir, session_start_time, lockFileHandler
+    global print_commands, print_command_output, no_terminal_output
     check_pexpect_version()
     signal_handler = SignalHandler()
     signal.signal(signal.SIGINT, signal_handler.handle_signal)
@@ -1047,8 +1053,11 @@ def setup(args, custom_session_jobs=None):
     sys.stdout.verbose = args.verbose
     sys.stdout.print_exceptions = args.exceptions
 
-    if args.print_output:
-        print_command_output = to_bool(args.print_output)
+    if args.no_terminal_output:
+        no_terminal_output = True
+
+    if args.print_command_output:
+        print_command_output = to_bool(args.print_command_output)
 
     settings, session_jobs, jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.config_file, custom_session_jobs)
 
@@ -1061,10 +1070,12 @@ def setup(args, custom_session_jobs=None):
     lockFileHandler = LockFileHandler(lock_file, args.force)
 
     results_dir, log_dir, last_dir, last_log_dir = setup_log_directories()
-    sys.stdout.output_file = open(os.path.join(last_log_dir, "terminal.log"), 'w+')
-
+    # Delete all the leftover files in last and last log dir
     cmd = "rm -f %s/*.* %s/*.*" % (last_dir, last_log_dir)
     out = os.popen(cmd).read()
+
+    # Setting log file for the terminal output
+    sys.stdout.output_file = open(os.path.join(last_log_dir, "terminal.log"), 'w+')
     return settings, session_jobs, jobs, cleanup_jobs, scp_jobs
 
 def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
@@ -1105,8 +1116,8 @@ def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
     print_t("*" * len(line), color=color)
     print_t("*" * len(line), color=color)
     print_t(line, color=color)
-    print_t("*" * 110, color=color)
-    print_t("*" * 110, color=color)
+    print_t("*" * len(line), color=color)
+    print_t("*" * len(line), color=color)
 
     # Write results file
     write_info_file(args, results_dir)
