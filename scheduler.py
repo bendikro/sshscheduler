@@ -1024,7 +1024,7 @@ def parse_args():
                                "This overrides any settings in the config file.", required=False)
     argparser.add_argument("-m", "--comment",  help="Comment to add to a file in the results directory.", required=False, default=None)
     argparser.add_argument("-f", "--force",  help="Ignores any existing lock file forcing the session to run.", action='store_true', required=False, default=False)
-    argparser.add_argument("config-file", help="The configuration file with the commands to run.")
+    argparser.add_argument("config_file", help="The configuration file with the commands to run.")
     args = argparser.parse_args()
     return args
 
@@ -1039,7 +1039,7 @@ def setup(args, custom_session_jobs=None):
     if args.print_output:
         print_command_output = to_bool(args.print_output)
 
-    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.file, custom_session_jobs)
+    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.config_file, custom_session_jobs)
 
     if args.simulate:
         settings["simulate"] = True

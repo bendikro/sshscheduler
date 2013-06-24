@@ -39,6 +39,7 @@ def main():
     itt_values = [100, 50]
     rtt_values = [30, 100, 200]
     stream_count_values = [1]
+    packets_in_flight_rdb_limit = [3, 6, 10, 20]
 
     # We want session jobs that are structured something like this:
     """
@@ -55,13 +56,17 @@ def main():
     """
     session_job_list = []
     # Loop over the product of all the values in the value lists
-    for loss, options, stream_count, itt, rtt, payload in itertools.product(loss_values, options_values, stream_count_values, itt_values, rtt_values, payload_values):
+    for loss, options, stream_count, itt, rtt, payload, p_in_flight_limit in itertools.product(loss_values, options_values,
+                                                                                               stream_count_values, itt_values,
+                                                                                               rtt_values, payload_values,
+                                                                                               packets_in_flight_rdb_limit):
         sj = {}
         sj['substitutions'] = {}
         sj['substitutions']["thin-rdb"] = {}
         sj["substitutions"]["thin-rdb"]["options"] = options
         sj["substitutions"]["thin-rdb"]["stream"] = "-I i:%d,S:%d" % (itt, payload)
         sj["substitutions"]["thin-rdb"]["stream_count"] = "-c %d" % stream_count
+        sj["substitutions"]["thin-rdb"]["thin-packet-limit"] = "%d" % p_in_flight_limit
         sj["substitutions"]["netem_uplink"]   = { "delay": "delay %dms" % (rtt/2), "loss": "loss %s" % loss }
         sj["substitutions"]["netem_downlink"] = { "delay": "delay %dms" % (rtt/2), "loss": "" }
 
