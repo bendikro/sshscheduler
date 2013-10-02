@@ -53,8 +53,8 @@ def check_pexpect_version():
 
 settings = { "session_name": "sshscheduler_example_session", "default_user": None, "results_dir": "results", "simulate": False }
 default_session_jobs_conf = {"session_jobs": None, "default_session_job_timeout_secs": None, "delay_between_session_jobs_secs": 0, "default_settings": None}
-default_job_conf = { "type": None, "color": None, "print_output": False, "command_timeout": None, "user": None, "cleanup": False, "return_values": {"pass": [0], "fail": [] } }
-default_command_conf = { "command_timeout": None, "return_values": {"pass": [], "fail": [] } }
+default_job_conf = { "type": None, "color": None, "print_output": False, "command_timeout": None, "user": None, "cleanup": False, "return_values": {"pass": [0], "fail": [], "retry": [] } }
+default_command_conf = { "command_timeout": None, "return_values": {"pass": [], "fail": [], "retry": [] } }
 default_session_conf = { "name_id": None, }
 default_wait_sleep_conf = { "sleep": 0, "type": None }
 
@@ -65,6 +65,7 @@ stopped = False
 fatal_abort = False
 gather_results = True
 sigint_ctrl = False
+retry_session_job = False
 
 print_t = None
 print_commands = False
@@ -117,7 +118,7 @@ class StdoutSplit:
         elif not no_terminal_output:
             print(string, file=self.stdout, end="")
 
-        if self.output_file:
+        if self.output_file and not self.output_file.closed:
             try:
                 print(string, file=self.output_file, end="")
             except ValueError, v:
@@ -259,7 +260,7 @@ class Job(Thread):
         self.fout = None
         self.last_command = None
         self.login_sucessfull = False
-        if self.conf.has_key("logfile_name"):
+        if "logfile_name" in self.conf:
             self.logfile_name = self.conf["logfile_name"]
             if self.session_job_conf and self.session_job_conf["name_id"]:
                 self.logfile_name = "%s_%s" % (self.session_job_conf["name_id"], self.logfile_name)
@@ -271,6 +272,10 @@ class Job(Thread):
         if hasattr(self, 'child') and self.child is not None:
             # Necessary to shut down server process that's still running
             try:
+                if "sigint_before_exit" in self.conf:
+                    for i in range (self.conf["sigint_before_exit"]["count"]):
+                        self.child.sendintr()
+                    time.sleep(self.conf["sigint_before_exit"]["sleep"])
                 self.child.close(force=True)
             except KeyboardInterrupt:
                 print_t("kill(): Caught KeyboardInterrupt")
@@ -278,6 +283,18 @@ class Job(Thread):
                 print_t("kill(): Caught OSError:", o)
 
     def run(self):
+        try:
+            self.do_run()
+        except SystemExit:
+            print_t("%s - Caught SystemExit" % self.name)
+            pass
+        except:
+            print_t("Exception in thread: %s" % self.name)
+            traceback.print_exc()
+        finally:
+            pass
+
+    def do_run(self):
         self.name = threading.current_thread().name
         print_t("Thread '%s' has started." % self.name, verbose=3)
 
@@ -334,6 +351,7 @@ class Job(Thread):
         return ret
 
     def execute_commands(self):
+        global retry_session_job
         print_output = self.logfile.print_to_stdout
 
         for c in self.commands:
@@ -365,7 +383,7 @@ class Job(Thread):
                 return
 
             if print_commands:
-                print_t("Command on %-9s: \"%s\"%s" % (self.host, command, " with timeout: %s sec" % c["command_timeout"] if c["command_timeout"] else "" ),
+                print_t("Command on '%-15s': \"%s\"%s" % (self.host, command, " with timeout: %s sec" % c["command_timeout"] if c["command_timeout"] else "" ),
                         color='yellow' if settings["simulate"] else None, prefix_color=self.conf["color"])
 
             if settings["simulate"]:
@@ -395,11 +413,19 @@ class Job(Thread):
             return_value = self.wait_for_command_exit(c, timeout)
 
             if not self.killed and not self.command_timed_out:
-                if (c["return_values"]["pass"] and not return_value in c["return_values"]["pass"]) or (c["return_values"]["fail"] and return_value in c["return_values"]["fail"]):
-                    print_t("Command on '%-9s' returned with status: %s: '%s', passing return values: %s, failing return values: %s" % \
-                                (self.host, str(return_value), self.last_command, str(c["return_values"]["pass"]), str(c["return_values"]["fail"])), color='red')
-                    print_t("Aborting session!", color="red")
-                    abort_job(results=False, fatal=True)
+                # If == 0 -> We used all the attempts
+                if return_value and c["return_values"]["retry"] and c["return_values"]["retry"][0] > 0:
+                    c["return_values"]["retry"][0] = c["return_values"]["retry"][0] - 1
+                    print_t("Job failed, but set to retry! New retry value: %d" % c["return_values"]["retry"][0], color="yellow")
+                    retry_session_job = True
+                    abort_job(results=False, fatal=False)
+                else:
+                    if (c["return_values"]["pass"] and not return_value in c["return_values"]["pass"]) or\
+                            (c["return_values"]["fail"] and return_value in c["return_values"]["fail"]):
+                        print_t("Command on '%-9s' returned with status: %s: '%s', passing return values: %s, failing return values: %s" % \
+                                    (self.host, str(return_value), self.last_command, str(c["return_values"]["pass"]), str(c["return_values"]["fail"])), color='red')
+                        print_t("Aborting session!", color="red")
+                        abort_job(results=False, fatal=True)
 
     def wait_for_command_exit(self, command, timeout):
         def get_last_return_value():
@@ -488,16 +514,16 @@ class Job(Thread):
             should_be_killed = self.conf.has_key("kill") and self.conf["kill"]
             if not should_be_killed:
                 if sigint_ctrl:
-                    print_t("Command on '%-9s' was killed by the script. (Session aborted with CTRL-c by user) (Status: %s) : '%s'" % \
+                    print_t("Command on '%-15s' was killed by the script. (Session aborted with CTRL-c by user) (Status: %s) : '%s'" % \
                                 (self.host, str(self.child.exitstatus), self.last_command), color='yellow')
                 elif global_timeout_expired:
-                    print_t("Command on '%-9s' was killed by the script because the global timeout expired (%d). (Status: %s) : '%s'" % \
+                    print_t("Command on '%-15s' was killed by the script because the global timeout expired (%d). (Status: %s) : '%s'" % \
                                 (self.host, global_timeout_expired, str(self.child.exitstatus), self.last_command), color='yellow')
                 else:
-                    print_t("Command on '%-9s' was killed by the script, but that is not as expected. (Status: %s) : '%s' " % \
+                    print_t("Command on '%-15s' was killed by the script, but that is not as expected. (Status: %s) : '%s' " % \
                                 (self.host, str(self.child.exitstatus), self.last_command), color='red')
             else:
-                print_t("Command on '%-9s' was killed by the script. (Status: %s) : '%s'" % \
+                print_t("Command on '%-15s' was killed by the script. (Status: %s) : '%s'" % \
                             (self.host, str(self.child.exitstatus), self.last_command), color='yellow', verbose=1)
 
     def ssh_login(self, user, host):
@@ -505,6 +531,7 @@ class Job(Thread):
             return None
 
         child = pxssh(timeout=30, logfile=self.logfile)
+
         count = 0
         while True:
             try:
@@ -523,6 +550,7 @@ class Job(Thread):
             except Exception, e:
                 print_t("Failed to connect:", e)
                 return child
+
         # Success
         return child
 
@@ -543,7 +571,7 @@ def kill_threads(threads_list):
             if hasattr(t, 'child') and t.child is not None and t.child.isalive():
                 t.child.read_nonblocking(size=1000, timeout=0)
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
-            #print_t("Exception: %s : %s" % (type(e), e))
+            #print_t("Exception: when reading nonblocking on child  %s : %s" % (type(e), e))
             # pexpect.TIMEOUT raised if no new data in buffer
             # pexpect.EOF raised when it reads EOF
             pass
@@ -556,7 +584,11 @@ def kill_threads(threads_list):
                 traceback.print_exc()
         except IOError as o:
             print_t("kill_threads() Caught IOError:", e, verbose=1)
+        except ValueError as e:
+            print_t("kill_threads() Caught ValueError:", e)
+            traceback.print_exc()
         print_t("Killing thread '%s' running on '%s' command: %s" % (t.name, t.host, str(t.last_command)), verbose=2)
+
         # Kills the pexpect child
         t.kill()
         #threads_list.remove(t)
@@ -600,7 +632,6 @@ def join_threads(threads, timeout=None):
     return True
 
 
-
 def setup_log_directories():
     # Setup directories for storing results and log files
     job_date = datetime.now().strftime("%Y-%m-%d-%H%M-%S")
@@ -629,7 +660,6 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
                                                                           "in test mode" if settings["simulate"] else ""),
                 color='yellow' if settings["simulate"] else 'green')
 
-
     def do_host_job(job):
         job[0]["log_dir"] = last_log_dir
         job[0]["last_dir"] = last_dir
@@ -648,11 +678,9 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
         if job[0].has_key("wait") and job[0]["wait"]:
             join_threads([t])
 
-    current_index = 0
     for i in range(len(jobs)):
         if stopped or fatal_abort:
             break
-        current_index = i
         job = jobs[i]
 
         if job[0].has_key("host"):
@@ -671,7 +699,9 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
                 print_t("Jobs completed uninterupted. Killing threads: %d" % len(threads_to_kill), color='green')
                 # Sleep the number of seconds given in conf
                 if job[0]["sleep"]:
-                    time.sleep(float(job[0]["sleep"]))
+                    print_t("Sleeping: %s" % job[0]["sleep"], verbose=3)
+                    if not settings["simulate"]:
+                        time.sleep(float(job[0]["sleep"]))
                 stopped = True
                 if not (global_timeout_expired or sigint_ctrl):
                     kill_threads(threads_to_kill)
@@ -684,13 +714,13 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
                 break
         elif job[0].has_key("sleep"):
             print_t("Sleeping: %s" % job[0]["sleep"], verbose=3)
-            time.sleep(float(job[0]["sleep"]))
+            if not settings["simulate"]:
+                time.sleep(float(job[0]["sleep"]))
         elif job[0].has_key("gather_results"):
             if not sigint_ctrl or fatal_abort:
                 gather_results = job[0]["gather_results"]
 
     end_time = datetime.now()
-
 
     # Do cleanup jobs (defined by cleanup attribute in host conf)
     if cleanup_jobs:
@@ -732,7 +762,7 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
             host, user = get_host_and_user(conf["remote_host"], conf["user"])
             scp_cmd = "scp %s@%s:%s %s" % (user, host, conf["filename"], target_file)
 
-            ln_cmd = "ln %s %s" % (target_file, link_file)
+            ln_cmd = "ln -f %s %s" % (target_file, link_file)
 
             cmd_scp_dict = copy.deepcopy(default_command_conf)
             cmd_ln_dict = copy.deepcopy(default_command_conf)
@@ -753,7 +783,7 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs):
         out = os.popen(cmd).read()
 
         if session_job_conf:
-            line = "Execution of session job '%s' finished in %s seconds at %s" % (session_job_conf["name_id"], str((end_time - session_job_start_time)), str(end_time))
+            line = "Execution of session job '%s' finished in\n%s seconds at %s" % (session_job_conf["name_id"], str((end_time - session_job_start_time)), str(end_time))
             print_t("=" * len(line), color='blue')
             print_t(line, color='blue')
             print_t("=" * len(line), color='blue')
@@ -771,7 +801,7 @@ def get_host_and_user(host, user):
         host = m.group(2)
     return host, user
 
-def parse_job_conf(filename, custom_session_jobs=None):
+def parse_job_conf(filename, custom_session_settings=None):
     global settings
     jobs = []
     cleanup_jobs = []
@@ -779,6 +809,7 @@ def parse_job_conf(filename, custom_session_jobs=None):
     job = None
     f = open(filename, 'r')
     lines = f.readlines()
+    f.close()
     eval_lines = ""
     session_jobs = None
 
@@ -852,6 +883,14 @@ def parse_job_conf(filename, custom_session_jobs=None):
             elif "scp" in job_conf:
                 job_conf["type"] = "scp"
 
+            if "sigint_before_exit" in job_conf:
+                # Default to sending signal once
+                if not "count" in job_conf["sigint_before_exit"]:
+                    job_conf["sigint_before_exit"]["count"] = 1
+                # Default to sleeping 1 second after signal
+                if not "sleep" in job_conf["sigint_before_exit"]:
+                    job_conf["sigint_before_exit"]["sleep"] = 1
+
             if job_conf["cleanup"]:
                 job_conf["wait"] = True
                 cleanup_jobs.append(job)
@@ -896,8 +935,9 @@ def parse_job_conf(filename, custom_session_jobs=None):
         parser.compilest(e)
         sys.exit(0)
 
-    if not custom_session_jobs is None:
-        session_jobs["session_jobs"] = custom_session_jobs
+    if not custom_session_settings is None:
+        for k in custom_session_settings:
+            session_jobs[k] = custom_session_settings[k]
         handle_session_job()
 
     # Add last job
@@ -1014,7 +1054,7 @@ class LockFileHandler(Thread):
             os.utime(self.lock_file, None)
         print_t("LockFileHandler run finished.", verbose=3)
 
-def write_info_file(args, results_dir):
+def write_info_file(args, results_dir, session_info_to_file):
     filename = "info.nfo"
     if args.comment:
         filename = "info_%s.nfo" % args.comment.replace(" ", "_")
@@ -1023,7 +1063,12 @@ def write_info_file(args, results_dir):
     f = open(filepath, "w")
     f.write("session start time: %s\n" % str(session_start_time))
     f.write("session end time: %s\n" % str(session_end_time))
-    f.write("comment: %s\n" % args.comment)
+
+    d = datetime(1,1,1) + (session_end_time - session_start_time)
+    f.write("Total duration: %d:%d:%d:%d\n" % (d.day-1, d.hour, d.minute, d.second))
+    f.write("Comment: %s\n" % args.comment)
+    if session_info_to_file:
+        f.write("Session info:\n%s\n" % session_info_to_file)
     f.close()
     os.symlink(os.path.abspath(filepath), os.path.join(last_dir, filename))
 
@@ -1043,7 +1088,7 @@ def parse_args():
     args = argparser.parse_args()
     return args
 
-def setup(args, custom_session_jobs=None):
+def setup(args, custom_session_settings=None):
     global results_dir, log_dir, last_dir, last_log_dir, session_start_time, lockFileHandler
     global print_commands, print_command_output, no_terminal_output
     check_pexpect_version()
@@ -1059,7 +1104,7 @@ def setup(args, custom_session_jobs=None):
     if args.print_command_output:
         print_command_output = to_bool(args.print_command_output)
 
-    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.config_file, custom_session_jobs)
+    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = parse_job_conf(args.config_file, custom_session_settings)
 
     if args.simulate:
         settings["simulate"] = True
@@ -1078,8 +1123,9 @@ def setup(args, custom_session_jobs=None):
     sys.stdout.output_file = open(os.path.join(last_log_dir, "terminal.log"), 'w+')
     return settings, session_jobs, jobs, cleanup_jobs, scp_jobs
 
-def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
-    global results_dir, session_start_time
+def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args, session_info_to_file=None):
+    global results_dir, session_start_time, session_end_time, stopped
+    global retry_session_job
     session_start_time = datetime.now()
     print_t("Starting session '%s' at %s %s" % (settings["session_name"], str(session_start_time),
                                                 "in test mode" if settings["simulate"] else ""),
@@ -1088,9 +1134,11 @@ def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
     # session_jobs defined in config
     if session_jobs:
         print_t("Session jobs to run: %d" % len(session_jobs["session_jobs"]))
-        for i, session_job in enumerate(session_jobs["session_jobs"]):
+        i = 0
+        while i < len(session_jobs["session_jobs"]):
             if fatal_abort or sigint_ctrl:
                 break
+            session_job = session_jobs["session_jobs"][i]
             stopped = False
             global_timeout_expired = 0
             if i != 0 and session_jobs["delay_between_session_jobs_secs"]:
@@ -1098,6 +1146,11 @@ def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
                 if not settings["simulate"]:
                     time.sleep(session_jobs["delay_between_session_jobs_secs"])
             run_session_job(session_job, jobs, cleanup_jobs, scp_jobs)
+            if retry_session_job:
+                retry_session_job = False
+                i = i - 1
+                print_t("Retrying session job '%s'" % session_jobs["session_jobs"][i]["name_id"], color="yellow")
+            i += 1
     else:
         run_session_job(None, jobs, cleanup_jobs, scp_jobs)
 
@@ -1120,19 +1173,24 @@ def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
     print_t("*" * len(line), color=color)
 
     # Write results file
-    write_info_file(args, results_dir)
+    write_info_file(args, results_dir, session_info_to_file)
 
 
-def do_run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args):
+def do_run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args, session_info_to_file=None):
     try:
-        run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args)
+        run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args, session_info_to_file)
     except SystemExit:
         pass
     except:
-        print_t("Exception in main:")
+        print_t("Exception in main: %s" % threading.current_thread().name)
         traceback.print_exc()
-        kill_threads(threads)
-        kill_threads(threads_to_kill)
+        try:
+            kill_threads(threads)
+            kill_threads(threads_to_kill)
+        except:
+            print_t("Exception in main: %s" % threading.current_thread().name)
+            traceback.print_exc()
+            os._exit(1)
     finally:
         if lockFileHandler:
             lockFileHandler.stop()

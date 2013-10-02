@@ -31,6 +31,9 @@ def main():
     import scheduler
 
     args = scheduler.parse_args()
+    custom_session_settings = {}
+    custom_session_settings["default_session_job_timeout_secs"] = None
+    custom_session_settings["delay_between_session_jobs_secs"] = delay_between_jobs_seconds
 
     # Create session jobs from all variations of the following options:
     loss_values = ["0.5", "5", "fixedv 7,8,9,11,15,16,17,18,19,20,30 40"]
@@ -84,8 +87,10 @@ def main():
         session_job_list.append(sj)
 
     pp.pprint(session_job_list)
+    print "Job count:", len(session_job_list)
 
-    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = scheduler.setup(args, custom_session_jobs=session_job_list)
+    custom_session_settings["session_jobs"] = session_job_list
+    settings, session_jobs, jobs, cleanup_jobs, scp_jobs = scheduler.setup(args, custom_session_settings=custom_session_settings)
     scheduler.do_run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args)
 
 if __name__ == "__main__":
