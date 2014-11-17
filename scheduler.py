@@ -800,8 +800,8 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs, resume=False
         print_t("\nStarting session job %d of %d at %s%s\n"
                 "ID: %s\n"
                 "Description: %s\n"
-                "Timeout: %s" % (session_job_conf["job_index"][0],
-                                 session_job_conf["job_index"][1],
+                "Timeout: %s" % (session_job_conf.get("job_index", [0])[0],
+                                 session_job_conf.get("job_index", [0, 0])[1],
                                  str(session_job_start_time),
                                  " (Test mode)" if settings["simulate"] else "",
                                  session_job_conf["name_id"],

@@ -670,13 +670,14 @@ def main():
         queue_limit *= 2
 
         if queue_type == "pfifo":
-            queue_limit = int(math.ceil(queue_limit / 1540))
+            queue_limit = int(math.ceil(queue_limit / 1500.0))
 
         if queue_lim:
             queue_limit = queue_lim
 
         delay_type = "fixed"
         #queue_limit = 10
+        #print "queue_limit:", queue_limit
 
         sj["substitutions"]["netem-data-path"] = { "delay": "delay %dms" % (rtt // 2), "loss": "" }
         sj["substitutions"]["netem-ack-path"] = { "delay": "delay %dms" % (rtt // 2), "loss": "" }
