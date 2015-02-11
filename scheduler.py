@@ -1314,7 +1314,7 @@ def parse_args(argparser=None):
     argparser.add_argument("-c", "--print-commands", help="Print the shell commands being executed.",
                            action='store_true', required=False)
     argparser.add_argument("-pco", "--print-command-output", metavar='boolean string',
-                           help="Print the output from all the remote commands to stdout."
+                           help="Print the output from all the remote commands to stdout. "
                            "This overrides any settings in the config file.", required=False)
     argparser.add_argument("-nto", "--no-terminal-output", action='store_true', help="Do not print anything to terminal"
                            ". The terminal output will only be written to terminal.log", required=False, default=False)

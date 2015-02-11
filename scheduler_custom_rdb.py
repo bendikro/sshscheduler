@@ -224,6 +224,7 @@ def main():
     dp.bandwidth_rate_cap_kbit = 5000
     dp.test_count = [0]
     dp.packets_in_flight_rdb_limit = [0]
+    dp.rdb_max_bundle_bytes = [0]
     dp.rdb_option = [False]
     dp.cong_thin = ["cubic"]
     dp.loss_values = [""]
@@ -244,6 +245,7 @@ def main():
     dp.tcp_args_options = []
     dp.queue_limit = [None]
     dp.abuser = [False]
+    dp.default_options = {"thin": {}, "thin2": {}}
 
     ##############################
     ##############################
@@ -302,24 +304,29 @@ def main():
         #p.bandwidth_rate_cap_kbit = 1000
         p.delay_between_jobs_seconds = 120
         p.cong_other = "cubic"
-        p.queue_limit = [120, 60]
-        p.queue_limit = [60]
+        #p.queue_limit = [120, 60]
+        #p.queue_limit = [60]
         #p.rdb_option = [True, False]
-        #p.cong_thin = ["rdb"]
-        p.cong_thin = ["cubic"]
-        p.default_options = { "thin": { "cong": "cubic"}, "thin2": { "cong": "cubic" } }
+        p.cong_thin = ["rdb"]
+        #p.cong_thin = ["cubic"]
+        p.default_options = { #"thin": { "cong": "cubic"},
+            # "thin2": { "cong": "cubic" }
+            "thin": { "cong": "rdb"},
+            "thin2": { "cong": "rdb" }
+             }
         p.rdb_option = [
             #True,
             "dpif",
-            #False
+            False
         ]
         p.tcp_args_options = [
             { "thin": {"thin_dupack": 0, "thin_linear": 0, "early_retr": 3 } },
-            { "thin": {"thin_dupack": 1, "thin_linear": 1, "early_retr": 3 } },
+            #{ "thin": {"thin_dupack": 1, "thin_linear": 1, "early_retr": 3 } },
             #{ "thin": {"thin_dupack": 1, "thin_linear": 1, "early_retr": 0 } },
 
             #{ "thin": {"thin_dupack": 0, "thin_linear": 0, "early_retr": 0 } },
         ]
+        p.test_count = [0]
         p.payload_values = [120]
         #p.thin_dupack = [1]
         #p.thin_linear = [1]
@@ -327,20 +334,28 @@ def main():
         p.tfrc = [1, 0]
         #p.tfrc = [0]
         p.dpif_lim = [10, 20]
-        p.dpif_lim = [10]
+        #p.dpif_lim = [10]
         defult_conf = {"cong": "rdb"}
         #defult_conf = {}
-        #p.itt_values = ["10:1", "30:3", "50:5", "100:10"] # "75:7", "50:5",
-        p.itt_values = ["10:1", "30:3", "75:7", "100:10"] # "75:7", "50:5",
-        p.itt_values = ["10:1"] # "75:7", "50:5",
+        p.itt_values = ["10:1", "20:2", "30:3", "50:5", "75:7", "100:10"] # "75:7", "50:5",
+        p.itt_values = ["10:1", "30:3", "50:5", "75:7", "100:10"] # "75:7", "50:5",
+        #p.itt_values = ["30:3"] # "75:7", "50:5",
         p.thin_args = dict(defult_conf, name="thin", prefix="r")
         p.packets_in_flight_rdb_limit = [100]
         p.stream_count = 20
         #p.stream_count = 10
         max_streams = p.stream_count + 1
         #thin_range = range(10, max_streams, 10)
-        thin_range = [5, 10, 20]
-        thin_range = [10]
+        thin_range = [5, 10, 13, 16]
+        #thin_range = [16]
+        #thin_range = [13,16]
+
+        #thin_range = [5, 10, 13]
+        #p.itt_values = ["10:1"]
+        #p.dpif_lim = [10]
+        #p.tfrc = [1, 0]
+        p.rdb_max_bundle_bytes = [1]
+
         thin_stream_count_values =  make_stream(p.thin_args, streams=thin_range)
         print "thin_stream_count_values:", thin_stream_count_values
         thin2_stream_count_values = make_stream(name="thin2", prefix="w", streams=thin_range)
@@ -373,10 +388,7 @@ def main():
             False
         ]
         p.tcp_args_options = [
-            {"thin_dupack": 0, "thin_linear": 0, "early_retr": 3 },
-            {"thin_dupack": 1, "thin_linear": 1, "early_retr": 3 },
-            {"thin_dupack": 1, "thin_linear": 1, "early_retr": 0 },
-            {"thin_dupack": 0, "thin_linear": 0, "early_retr": 0 },
+            { "thin": {"thin_dupack": 0, "thin_linear": 0, "early_retr": 3 } },
         ]
         #p.rdb_option = [False]
         p.payload_values = [120]
@@ -417,28 +429,33 @@ def main():
     ##############################
     def RDB_vs_greedy_misuse_tests():
         p = TestProperties(default_test_properties)
-        p.job_duration_minutes = [20]
-        p.delay_between_jobs_seconds = 300
+        p.job_duration_minutes = [5]
+        p.delay_between_jobs_seconds = 100
         #p.delay_between_jobs_seconds = 1
         p.cong_other = "cubic"
         p.cong_thin = ["rdb"]
-        p.default_options = { "thin": { "cong": "cubic", "abuser": "800"}, "thin2": { "cong": "cubic" } }
+        p.default_options = { "thin": { "cong": "rdb" },
+                              #"thin": { "cong": "cubic", "abuser": "800"},
+                              #"thin2": { "cong": "cubic" },
+                              "thin2": { "cong": "rdb" },
+                          }
         p.rdb_option = [
             #True,
             "dpif",
-            #False
+            False
         ]
         p.tcp_args_options = [
-            {"thin_dupack": 0, "thin_linear": 0, "early_retr": 3 },
-            {"thin_dupack": 1, "thin_linear": 1, "early_retr": 3 },
-            {"thin_dupack": 1, "thin_linear": 1, "early_retr": 0 },
-            {"thin_dupack": 0, "thin_linear": 0, "early_retr": 0 },
+            { "thin": {"thin_dupack": 0, "thin_linear": 0, "early_retr": 3 } },
+            #{"thin_dupack": 0, "thin_linear": 0, "early_retr": 3 },
+            #{"thin_dupack": 1, "thin_linear": 1, "early_retr": 3 },
+            #{"thin_dupack": 1, "thin_linear": 1, "early_retr": 0 },
+            #{"thin_dupack": 0, "thin_linear": 0, "early_retr": 0 },
         ]
         #p.rdb_option = [False]
         p.payload_values = [400]
         #p.payload_values = [400, 700]
         p.tfrc = [1, 0]
-        p.tfrc = [0]
+        #p.tfrc = [0]
         #defult_conf = {"cong": "cubic"}
         #defult_conf = {"cong": "rdb"}
         defult_conf = {}
@@ -446,8 +463,8 @@ def main():
         #p.loss_values = ["10", "5", "2", "0.5"]
         #p.itt_values = ["100:10", "50:5", "30:3", "10:1", "1"] # "75:7", "50:5",
         p.itt_values = ["1", "5:1", "10:1", "15:1", "25:2", "30:3", "50:5"] # "75:7", "50:5",
-        #p.itt_values = ["15:1", "25:2"]
-        p.itt_values = ["5:2"]
+        p.itt_values = ["5:1", "10:1", "15:1", "25:2", "50:5"]
+        p.itt_values = ["5:1", "15:1", "30:3"]
         p.test_count = [0]
 
         p.thin_args = dict(defult_conf, name="thin", prefix="r")
@@ -459,8 +476,10 @@ def main():
         max_streams = max(p.stream_count + 1, 10)
         #thin_range = range(10, max_streams, 5)
         #thin_range = [1, 2, 3, 4, 5, 10, 20]
-        #thin_range = [1, 5, 10, 15, 20]
-        thin_range = [1]
+        thin_range = [1, 2, 3, 5, 10, 15, 20]
+        thin_range = [3, 5, 7, 10, 13]
+        #thin_range = [5, 10]
+
         thin_stream_count_values =  make_stream(p.thin_args, streams=thin_range)
         thin2_stream_count_values = make_stream(name="thin2", prefix="w", streams=thin_range)
         thick_streams = thin_range
@@ -480,28 +499,50 @@ def main():
     ##############################
     def simple_RDB_PIF_tests():
         p = TestProperties(default_test_properties)
-        p.job_duration_minutes = [20]
-        p.job_duration_minutes = [5]
-        p.delay_between_jobs_seconds = 60
-        #p.delay_between_jobs_seconds = 1
+        p.bandwidth_rate_cap_kbit = 5000
+        p.job_duration_minutes = [1]
+        #p.job_duration_minutes = [5]
+        #p.delay_between_jobs_seconds = 60
+        p.delay_between_jobs_seconds = 1
         p.cong_other = "cubic"
         p.rdb_option = [True, False]
+        #p.rdb_option = ["dpif"]
+        p.rdb_option = [True]
+        #p.rdb_option = [False]
         p.payload_values = [120]
-        p.thin_dupack = [1]
-        p.thin_linear = [1]
+        p.thin_dupack = [0]
+        p.thin_linear = [0]
+        #p.tfrc = [1]
+        p.tfrc = [0]
         #p.early_retr = [1]
-        #defult_conf = {"cong": "cubic"}
+        defult_conf = {"cong": "cubic"}
         defult_conf = {"cong": "rdb"}
-        #p.loss_values = ["0.5", "5"]
-        p.loss_values = ["10", "5", "2", "0.5"]
+        #defult_conf = {"cong": "rdb"}
+        p.loss_values = ["10", "5", "2", "0.5", "1", "0.2", "0.1"]
+        #p.loss_values = ["5"]
+        #p.loss_values = [""]
         p.itt_values = ["100:10", "75:7", "50:5", "30:3"]
-        #p.itt_values = ["50"]
+        #p.itt_values = ["10:5"]
         p.thin_args = dict(defult_conf, name="thin", prefix="r")
+        #p.packets_in_flight_rdb_limit = [2, 4, 6, 8]
         p.packets_in_flight_rdb_limit = [4, 8]
-        #p.packets_in_flight_rdb_limit = [4]
+
+        #p.packets_in_flight_rdb_limit = [40]
+        #p.itt_values = ["100:10", "75:7"]
+        #p.loss_values = ["5", "2"]
+        #p.loss_values = ["1"]
+        #p.loss_values = [""]
+        #p.itt_values = ["50"]
+        #p.payload_values = [729]
+
+        p.dpif_lim = [10]
         p.stream_count = 20
         max_streams = max(p.stream_count + 1, 22)
-        thin_stream_count_values =  make_stream(p.thin_args, sr=(p.stream_count, max_streams, 21 + max_streams))
+        #max_streams = 2
+        srange = range(20, max_streams, 15)
+        srange = [1]
+        thin_stream_count_values =  make_stream(p.thin_args, streams=srange) # sr=(p.stream_count, max_streams, 21 + max_streams)
+        print "thin_stream_count_values:", thin_stream_count_values
         #thin2_stream_count_values = make_stream(name="thin2", prefix="y", sr=(p.stream_count, max_streams, 10))
         #p.thick_stream_count_values = make_stream(name="thick", prefix="z", sr=(10, 11, 10))
         #p.streams = zip(thin_stream_count_values, thin2_stream_count_values)
@@ -514,7 +555,7 @@ def main():
     ##############################
     def thin_stream_MOD_CDF():
         p = TestProperties(default_test_properties)
-        p.job_duration_minutes = [5]
+        p.job_duration_minutes = [60]
         p.delay_between_jobs_seconds = 60
         p.cong_other = "cubic"
         p.rdb_option = [False]
@@ -522,6 +563,7 @@ def main():
         p.thin_dupack = [0, 1]
         p.thin_linear = [0, 1]
         p.early_retr = [0, 3]
+
         p.thin_dupack = [0]
         p.thin_linear = [0]
         p.early_retr = [3]
@@ -530,16 +572,16 @@ def main():
         p.stream_count = 21
         max_streams = max(p.stream_count + 1, 22)
         print "RANGE:", range(p.stream_count, max_streams, 21 + max_streams)
-        thin_stream_count_values =  make_stream(p.thin_args, itt="100", streams=range(p.stream_count, max_streams, 21 + max_streams))
+        thin_stream_count_values =  make_stream(p.thin_args, itt="100:15", streams=range(p.stream_count, max_streams, 21 + max_streams))
         thick_stream_count_values = make_stream(name="thick", prefix="z", streams=range(10, 11, 10))
         p.streams = zip(thin_stream_count_values, thick_stream_count_values)
         return p
 
-    p = thin_stream_MOD_CDF()
+    #p = thin_stream_MOD_CDF()
     #p = simple_RDB_PIF_tests()
     #p = RDB_vs_greedy_tests()
     #p = RDB_vs_greedy_misuse_tests()
-    #p = TFRC_RDB_vs_greedy_tests()
+    p = TFRC_RDB_vs_greedy_tests()
     #p = module_testing()
 
     # We want session jobs that are structured something like this:
@@ -570,6 +612,7 @@ def main():
             conf = {}
             conf["stream_count"] = "-c %d" % d.stream_count
             conf["thin-packet-limit"] = "%d" % p_in_flight_limit
+            conf["rdb-max-bundle-bytes"] = "%d" % rdb_max_bundle_bytes
             conf["start_port"] = "-P %d" % start_port[d.name]
 
             itt_base = itt
@@ -587,14 +630,21 @@ def main():
             conf["eretr"] = d.early_retr
             conf["options"] = ""
 
+            print "cong_control (%s): %s" % (cong_control == "rdb", cong_control)
+            print "d.name:", d.name
+
             if d.name == "thin":
                 conf["tfrc"] = tfrc
                 conf["rdb"] = 1 if rdb is not False else 0
+                conf["loadrdb"] = 1 if cong_control == "rdb" else 0
                 conf["dpif"] = dpif_lim
             else:
                 conf["tfrc"] = 0
                 conf["rdb"] = 0
                 conf["dpif"] = 0
+
+            if d.name == "thin2":
+                conf["loadrdb"] = 1 if cong_control == "rdb" else 0
 
             if d.name == "thick":
                 conf["stream"] = "-I b:%dKb" % p.bandwidth_rate_cap_kbit
@@ -606,6 +656,8 @@ def main():
                 conf["options"] += " -a" if d.thin_linear else ""
                 conf["options"] += " -G %s" % cong_control
                 conf["options"] += " -B%s" % (d.abuser) if d.abuser else ""
+
+                #conf["options"] += " -N"
 
                 #print "%s options: %s" % (d.name, conf["options"])
 
@@ -677,9 +729,9 @@ def main():
 
         delay_type = "fixed"
         #queue_limit = 10
-        #print "queue_limit:", queue_limit
 
         sj["substitutions"]["netem-data-path"] = { "delay": "delay %dms" % (rtt // 2), "loss": "" }
+        #sj["substitutions"]["netem-data-path"] = { "delay": "reorder 100%% gap 10 delay %dms" % (rtt // 2), "loss": "" }
         sj["substitutions"]["netem-ack-path"] = { "delay": "delay %dms" % (rtt // 2), "loss": "" }
 
         sj["substitutions"]["rate"] = { "bandwidth_rate_cap": "%dkbit" % p.bandwidth_rate_cap_kbit,
@@ -794,6 +846,7 @@ def main():
         #segm_off_thin = segm_off
         #segm_off_thick = segm_off
         p_in_flight_limit = 0
+        rdb_max_bundle_bytes = 0
         dpif_lim = 0
         default_options = None
         tfrc = 0
@@ -801,7 +854,7 @@ def main():
         if rdb is True:
             default_options = deepcopy(p.default_options)
             default_options["thin"]["cong"] = "rdb"
-            for p_in_flight_limit, tfrc in itertools.product(p.packets_in_flight_rdb_limit, p.tfrc):
+            for p_in_flight_limit, rdb_max_bundle_bytes, tfrc in itertools.product(p.packets_in_flight_rdb_limit, p.rdb_max_bundle_bytes, p.tfrc):
                 job_str, sj = create_job_dict(p)
                 if sj["name_id"] in jobs_dup_dict:
                     print "A job with this key already exists:", sj["name_id"]
@@ -813,7 +866,7 @@ def main():
         elif rdb is "dpif":
             default_options = deepcopy(p.default_options)
             default_options["thin"]["cong"] = "rdb"
-            for dpif_lim, tfrc in itertools.product(p.dpif_lim, p.tfrc):
+            for dpif_lim, rdb_max_bundle_bytes, tfrc in itertools.product(p.dpif_lim, p.rdb_max_bundle_bytes, p.tfrc):
                 job_str, sj = create_job_dict(p)
                 if sj["name_id"] in jobs_dup_dict:
                     print "A job with this key already exists:", sj["name_id"]
@@ -848,6 +901,8 @@ def main():
 
     for i, sj in enumerate(session_job_list):
         sj["job_index"] = [i + 1, len(session_job_list)]
+
+    #session_job_list = session_job_list[:1]
 
     import StringIO
     job_list_output = StringIO.StringIO()
