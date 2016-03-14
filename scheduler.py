@@ -279,7 +279,7 @@ sys.stdout = StdoutSplit(print_to_stdout=True)
 print_t = sys.stdout.print_t
 
 
-class scpJob(pxssh):
+class ScpJob(pxssh):
     def __init__(self, logfile=None):
         pxssh.__init__(self, logfile=logfile)
         pxssh._spawn(self, "/bin/bash")
@@ -295,6 +295,8 @@ class Job(Thread):
         self.host_and_id = "%s%s" % (host_conf["host"], ":" + host_conf["id"] if host_conf["id"] else "")
         self.name_and_host = None
         self.user = host_conf["user"]
+        self.port = host_conf.get("port", 22)
+        self.bash_path = host_conf.get("bash_path", "/bin/bash")
         self.commands = commands
         self.killed = False
         self.command_timed_out = False
@@ -362,15 +364,15 @@ class Job(Thread):
             self.logfile = StdoutSplit(self.fout, line_prefix="%s ::" % line_prefix, color=self.conf["color"])
 
         if self.conf["type"] == "ssh":
-            self.child = self.ssh_login(self.user, self.host)
+            self.child = self.ssh_login(self.user, self.host, self.port)
             if not self.login_sucessfull:
                 if not settings["simulate"]:
-                    print_t("Failed to connect to host %s" % self.host, color='red')
+                    print_t("Failed to connect to host %s on port %s" % (self.host, self.port), color='red')
                     print_t("child.timeout: %s" % self.child.timeout, color='red')
                     abort_job(results=False, fatal=True)
                     return
         elif self.conf["type"] == "scp":
-            self.child = scpJob(logfile=self.logfile)
+            self.child = ScpJob(logfile=self.logfile)
 
         self.execute_commands()
         if not settings["simulate"]:
@@ -445,7 +447,7 @@ class Job(Thread):
                         sys.exit(1)
 
                 # Execute commands in separate bash? Needed if using pipes..
-                command = "/bin/bash -c '%s'" % command
+                command = "%s -c '%s'" % (self.bash_path, command)
 
                 if stopped:
                     print_t("Session job has been stopped before all commands were executed!",
@@ -508,7 +510,7 @@ class Job(Thread):
                             print_t("Aborting session!", color="red")
                             abort_job(results=False, fatal=True)
 
-            if "foreach" in cmd:
+            if cmd.get("foreach", False):
                 foreach_subs_id = cmd["substitute_id"]
                 for each_sub_id in self.session_job_conf["substitutions"][foreach_subs_id]["foreach"]:
                     cmd_conf = copy.deepcopy(cmd)
@@ -649,7 +651,7 @@ class Job(Thread):
                         (self.host_and_id, str(self.child.exitstatus), self.last_command), color='yellow', verbose=1,
                         split_newlines=True)
 
-    def ssh_login(self, user, host):
+    def ssh_login(self, user, host, port=22):
         if settings["simulate"]:
             return None
 
@@ -657,9 +659,9 @@ class Job(Thread):
         count = 0
         while True:
             try:
-                print_t("Connecting to '%s@%s'" % (self.user, self.host), verbose=3)
+                print_t("Connecting to '%s@%s' on port '%s'" % (self.user, self.host, self.port), verbose=3)
                 count += 1
-                child.login(self.host, self.user, None)
+                child.login(self.host, self.user, port=port)
                 self.login_sucessfull = True
                 break
             except pexpect.TIMEOUT, e:
@@ -764,25 +766,34 @@ def join_threads(threads, timeout=None):
 
 makedirs = []
 
+def get_absolute(path):
+    if not os.path.isabs(path):
+        return os.path.join(os.getcwd(), path)
+    return path
 
 def setup_directories(args, settings):
     global makedirs
     # Setup directories for storing results and log files
     job_date = datetime.now().strftime("%Y-%m-%d-%H%M-%S")
     jobname_dir = "%s/%s" % (settings["results_dir"], settings["session_name"])
+
     if args.name:
-        settings["resume"] = True
+        settings["resume"] = settings.get("resume", True)
         jobname_dir = "%s/%s" % (jobname_dir, args.name)
         settings["resume_results_dir"] = "%s/all_results" % (jobname_dir)
         makedirs.append(settings["resume_results_dir"])
+
     settings["results_dir"] = "%s/%s" % (jobname_dir, job_date)
+
+    if not args.resume:
+        settings["resume_results_dir"] = settings["results_dir"]
+
     settings["log_dir"] = "%s/logs" % settings["results_dir"]
     settings["last_dir"] = "%s/last" % jobname_dir
     settings["last_log_dir"] = "%s/log" % settings["last_dir"]
     settings["jobname_dir"] = jobname_dir
     makedirs.append(settings["log_dir"])
     makedirs.append(settings["last_log_dir"])
-
 
 def mkdirs():
     for d in makedirs:
@@ -946,7 +957,8 @@ def run_session_job(session_job_conf, jobs, cleanup_jobs, scp_jobs, resume=False
         width = longest_line_width(line)
         print_t("=" * width, color='blue')
         print_t(line, color='blue', split_newlines=True)
-        print_t("Results are stored in %s" % settings["results_dir"], color='blue', split_newlines=True)
+        print_t("=" * width, color='blue')
+        print_t("Results are stored in %s/" % get_absolute(settings["results_dir"]), color='blue', split_newlines=True)
         print_t("=" * width, color='blue')
 
     # Copy logs to proper directory
@@ -1062,6 +1074,7 @@ def parse_job_conf(filename, custom_session_settings=None, custom_settings=None)
             job = [job_conf, []]
             host, h_user = get_host_and_user(job_conf["host"], None)
             if h_user:
+                job_conf["host"] = host
                 if job_conf["user"] and h_user != job_conf["user"]:
                     print_t("User defined both in host string and in user key. host: '%s', user: '%s'. Using user '%s'"
                             % (job_conf["host"], job_conf["user"], job_conf["user"]), color="Magenta")
@@ -1122,9 +1135,9 @@ def parse_job_conf(filename, custom_session_settings=None, custom_settings=None)
         elif "session_jobs" in d:
             if session_jobs is None:
                 session_jobs = default_session_jobs_conf.copy()
-                print("netem_delay1: '%s'" % session_jobs["default_settings"])
+                #print("netem_delay1: '%s'" % session_jobs["default_settings"])
                 session_jobs.update(d)
-                print("netem_delay2: '%s'" % session_jobs["default_settings"]["netem_delay"])
+                #print("netem_delay2: '%s'" % session_jobs["default_settings"]["netem_delay"])
                 handle_session_job()
 
     if eval_lines:
@@ -1285,6 +1298,11 @@ class LockFileHandler(Thread):
             os.utime(self.lock_file, None)
         print_t("LockFileHandler run finished.", verbose=3)
 
+def get_longest_line_len(text):
+    max_len = 0
+    for l in text.splitlines():
+        max_len = max(max_len, len(l))
+    return max_len
 
 def write_info_file(args, session_info_to_file):
     filename = "info.nfo"
@@ -1352,6 +1370,9 @@ def setup(args, custom_session_settings=None, custom_settings=None):
     if args.simulate:
         settings["simulate"] = True
 
+    if args.resume:
+        settings["resume"] = True
+
     if args.print_commands:
         print_commands = True
 
@@ -1402,14 +1423,18 @@ def run_jobs(settings, session_jobs, jobs, cleanup_jobs, scp_jobs, args, session
     color = "blue"
     if fatal_abort:
         color = "red"
-    line = "Execution of session '%s' finished in %s seconds at %s" % (settings["session_name"],
-                                                                       str((session_end_time - session_start_time)),
-                                                                       str(session_end_time))
-    print_t("*" * len(line), color=color)
-    print_t("*" * len(line), color=color)
-    print_t(line, color=color)
-    print_t("*" * len(line), color=color)
-    print_t("*" * len(line), color=color)
+
+    info = "Execution of session '%s' finished at %s\n" % (settings["session_name"], str(session_end_time))
+    info += "Ran %d jobs with a total duration of %s\n" % (len(session_jobs), str((session_end_time - session_start_time)))
+    info += "Results are stored in %s/" % get_absolute(settings["resume_results_dir"])
+
+    length = get_longest_line_len(info)
+
+    print_t("*" * length, color=color)
+    print_t("*" * length, color=color)
+    print_t(info, color=color, split_newlines=True)
+    print_t("*" * length, color=color)
+    print_t("*" * length, color=color)
 
     # Write results file
     write_info_file(args, session_info_to_file)
